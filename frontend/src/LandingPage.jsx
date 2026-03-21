@@ -294,11 +294,19 @@ const NAV_SECTION_LINKS = [
   { href: '#faq', label: 'FAQ' },
 ]
 
-const API_BASE = String(import.meta.env.VITE_API_BASE || '').replace(/\/$/, '')
+/**
+ * API base URL (no trailing slash).
+ * - Local dev: leave VITE_API_BASE unset → same-origin `/api/*` (Vite proxies to backend).
+ * - Production (e.g. Vercel): set VITE_API_BASE to your deployed Node API, e.g. https://xxx.railway.app
+ */
+const configuredApiBase = String(import.meta.env.VITE_API_BASE || '').trim().replace(/\/$/, '')
+const API_BASE =
+  import.meta.env.DEV && !configuredApiBase ? '' : configuredApiBase || (import.meta.env.PROD ? '' : '')
 const SCRAPE_API = API_BASE ? `${API_BASE}/api/scrape` : '/api/scrape'
 const CONTEXT_API_BASE = API_BASE ? `${API_BASE}/api/chatbot-context` : '/api/chatbot-context'
 const CHAT_TEST_BASE = API_BASE ? `${API_BASE}/api/chatbot-test` : '/api/chatbot-test'
 const TRIAL_INQUIRY_API = API_BASE ? `${API_BASE}/api/trial-inquiry` : '/api/trial-inquiry'
+const CONTACT_DEMO_API = API_BASE ? `${API_BASE}/api/contact-demo` : '/api/contact-demo'
 
 const LOCAL_SITE_MARK = `${import.meta.env.BASE_URL}favicon.svg`
 /** Set `VITE_LANDING_LOGO_URL` to any image URL (matches index.html favicon / OG when set at build). Chatbot uses only scraped `theme.logoUrl`. */
@@ -2003,6 +2011,8 @@ export default function LandingPage() {
   const [openFaq, setOpenFaq] = useState(0)
   const [demoModalOpen, setDemoModalOpen] = useState(false)
   const [testChatbotOpen, setTestChatbotOpen] = useState(false)
+  const [contactSending, setContactSending] = useState(false)
+  const [contactFeedback, setContactFeedback] = useState(null)
 
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   const openDemoModal = useCallback(() => {
@@ -2015,6 +2025,48 @@ export default function LandingPage() {
     setTestChatbotOpen(true)
   }, [])
   const closeTestChatbot = useCallback(() => setTestChatbotOpen(false), [])
+
+  const handleContactDemoSubmit = useCallback(async (e) => {
+    e.preventDefault()
+    setContactFeedback(null)
+    const form = e.currentTarget
+    const fd = new FormData(form)
+    const payload = {
+      businessName: String(fd.get('business') || '').trim(),
+      yourName: String(fd.get('name') || '').trim(),
+      email: String(fd.get('email') || '').trim(),
+      phone: String(fd.get('phone') || '').trim(),
+      websiteUrl: String(fd.get('url') || '').trim(),
+      notes: String(fd.get('notes') || '').trim(),
+    }
+    if (!payload.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
+      setContactFeedback({ ok: false, text: 'Please enter a valid email address.' })
+      return
+    }
+    setContactSending(true)
+    try {
+      const res = await fetch(CONTACT_DEMO_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.ok) {
+        const apiErr = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : ''
+        throw new Error(apiErr || 'Could not send your request. Please try again.')
+      }
+      form.reset()
+      setContactFeedback({
+        ok: true,
+        text: 'Thanks! We emailed you a copy of your request. Our team will get back to you within 24 hours.',
+      })
+    } catch (err) {
+      const m = err instanceof Error ? err.message : ''
+      setContactFeedback({ ok: false, text: m || 'Something went wrong. Please try again.' })
+    } finally {
+      setContactSending(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -2525,35 +2577,64 @@ export default function LandingPage() {
               </p>
             </Reveal>
             <Reveal delay={100}>
-              <form
-                className="cta-form"
-                onSubmit={(e) => {
-                  e.preventDefault()
-                }}
-              >
+              <form className="cta-form" onSubmit={handleContactDemoSubmit} noValidate>
                 <div className="cta-form__row">
                   <label className="field">
                     <span className="field__label">Business name</span>
-                    <input className="field__input" name="business" placeholder="Ridgeline HVAC LLC" />
+                    <input
+                      className="field__input"
+                      name="business"
+                      placeholder="Ridgeline HVAC LLC"
+                      autoComplete="organization"
+                      disabled={contactSending}
+                    />
                   </label>
                   <label className="field">
                     <span className="field__label">Your name</span>
-                    <input className="field__input" name="name" placeholder="Jordan Ellis" />
+                    <input
+                      className="field__input"
+                      name="name"
+                      placeholder="Jordan Ellis"
+                      autoComplete="name"
+                      disabled={contactSending}
+                    />
                   </label>
                 </div>
                 <div className="cta-form__row">
                   <label className="field">
                     <span className="field__label">Email</span>
-                    <input className="field__input" type="email" name="email" placeholder="you@yourbusiness.com" />
+                    <input
+                      className="field__input"
+                      type="email"
+                      name="email"
+                      placeholder="you@yourbusiness.com"
+                      autoComplete="email"
+                      required
+                      disabled={contactSending}
+                    />
                   </label>
                   <label className="field">
                     <span className="field__label">Phone</span>
-                    <input className="field__input" type="tel" name="phone" placeholder="(555) 000-0000" />
+                    <input
+                      className="field__input"
+                      type="tel"
+                      name="phone"
+                      placeholder="(555) 000-0000"
+                      autoComplete="tel"
+                      disabled={contactSending}
+                    />
                   </label>
                 </div>
                 <label className="field">
                   <span className="field__label">Website URL</span>
-                  <input className="field__input" name="url" placeholder="https://yoursite.com" />
+                  <input
+                    className="field__input"
+                    name="url"
+                    placeholder="https://yoursite.com"
+                    inputMode="url"
+                    autoComplete="url"
+                    disabled={contactSending}
+                  />
                 </label>
                 <label className="field">
                   <span className="field__label">What should we know?</span>
@@ -2562,10 +2643,19 @@ export default function LandingPage() {
                     name="notes"
                     rows={4}
                     placeholder="e.g. Two locations, emergency fees after 8 PM, seasonal tune-up promo…"
+                    disabled={contactSending}
                   />
                 </label>
-                <button type="submit" className="btn btn--light btn--lg btn--block">
-                  Request a demo
+                {contactFeedback ? (
+                  <p
+                    className={`cta-form__feedback ${contactFeedback.ok ? 'cta-form__feedback--ok' : 'cta-form__feedback--err'}`}
+                    role="status"
+                  >
+                    {contactFeedback.text}
+                  </p>
+                ) : null}
+                <button type="submit" className="btn btn--light btn--lg btn--block" disabled={contactSending}>
+                  {contactSending ? 'Sending…' : 'Request a demo'}
                 </button>
               </form>
             </Reveal>

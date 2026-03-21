@@ -37,12 +37,35 @@ function companyContactMeta() {
 }
 const app = express()
 
+/** Comma-separated exact origins, e.g. https://your-app.vercel.app (no trailing slash). Localhost always allowed. */
+function loadCorsAllowlist() {
+  const raw = process.env.CORS_ORIGINS || ''
+  return raw
+    .split(',')
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean)
+}
+
+const corsLocalPattern = /^https?:\/\/(localhost|127\.0\.0\.1)(?::\d+)?$/
+
 app.use(
   cors({
-    origin: [
-      /^https?:\/\/localhost(?::\d+)?$/,
-      /^https?:\/\/127\.0\.0\.1(?::\d+)?$/,
-    ],
+    origin(origin, callback) {
+      if (!origin) return callback(null, true)
+      if (corsLocalPattern.test(origin)) return callback(null, true)
+      const allow = loadCorsAllowlist()
+      if (allow.includes(origin)) return callback(null, true)
+      if (process.env.CORS_ALLOW_VERCEL === '1') {
+        try {
+          const host = new URL(origin).hostname
+          if (host === 'vercel.app' || host.endsWith('.vercel.app')) return callback(null, true)
+        } catch {
+          /* ignore */
+        }
+      }
+      console.warn('[cors] blocked origin:', origin)
+      callback(null, false)
+    },
     methods: ['GET', 'POST', 'OPTIONS'],
   }),
 )
@@ -416,6 +439,13 @@ app.post('/api/scrape', async (req, res) => {
 })
 
 app.listen(PORT, () => {
+  const corsExtra = loadCorsAllowlist()
+  console.log(
+    corsExtra.length
+      ? `[cors] allowed + localhost: ${corsExtra.join(', ')}`
+      : '[cors] only localhost / 127.0.0.1 (set CORS_ORIGINS for your Vercel URL)',
+  )
+  if (process.env.CORS_ALLOW_VERCEL === '1') console.log('[cors] CORS_ALLOW_VERCEL=1 → *.vercel.app allowed')
   console.log(`Scrape API listening on http://127.0.0.1:${PORT}`)
   console.log('POST /api/scrape with JSON { website, name, email, phone }')
   console.log('GET /api/chatbot-context/new-id — allocate 8-digit context ID')
