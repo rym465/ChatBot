@@ -2,6 +2,13 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { DEFAULT_LANDING_LOGO_CDN } from './brandMark.js'
+import {
+  SCRAPE_API,
+  CONTEXT_API_BASE,
+  CHAT_TEST_BASE,
+  TRIAL_INQUIRY_API,
+  CONTACT_DEMO_API,
+} from './api.js'
 
 function useReveal() {
   const ref = useRef(null)
@@ -293,20 +300,6 @@ const NAV_SECTION_LINKS = [
   { href: '#pricing', label: 'Pricing' },
   { href: '#faq', label: 'FAQ' },
 ]
-
-/**
- * API base URL (no trailing slash).
- * - Local dev: leave VITE_API_BASE unset → same-origin `/api/*` (Vite proxies to backend).
- * - Production (e.g. Vercel): set VITE_API_BASE to your deployed Node API, e.g. https://xxx.railway.app
- */
-const configuredApiBase = String(import.meta.env.VITE_API_BASE || '').trim().replace(/\/$/, '')
-const API_BASE =
-  import.meta.env.DEV && !configuredApiBase ? '' : configuredApiBase || (import.meta.env.PROD ? '' : '')
-const SCRAPE_API = API_BASE ? `${API_BASE}/api/scrape` : '/api/scrape'
-const CONTEXT_API_BASE = API_BASE ? `${API_BASE}/api/chatbot-context` : '/api/chatbot-context'
-const CHAT_TEST_BASE = API_BASE ? `${API_BASE}/api/chatbot-test` : '/api/chatbot-test'
-const TRIAL_INQUIRY_API = API_BASE ? `${API_BASE}/api/trial-inquiry` : '/api/trial-inquiry'
-const CONTACT_DEMO_API = API_BASE ? `${API_BASE}/api/contact-demo` : '/api/contact-demo'
 
 const LOCAL_SITE_MARK = `${import.meta.env.BASE_URL}favicon.svg`
 /** Set `VITE_LANDING_LOGO_URL` to any image URL (matches index.html favicon / OG when set at build). Chatbot uses only scraped `theme.logoUrl`. */
