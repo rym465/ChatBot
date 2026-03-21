@@ -1,13 +1,10 @@
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
-import { fileURLToPath } from 'url'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const DATA_DIR = path.join(__dirname, '..', 'data', 'chatbots')
+import { getChatbotsDir } from './dataPaths.js'
 
 export function ensureDataDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true })
+  fs.mkdirSync(getChatbotsDir(), { recursive: true })
 }
 
 /** 8-digit numeric ID, range [10000000, 99999999] */
@@ -17,7 +14,7 @@ export function randomEightDigitId() {
 }
 
 export function idExists(id) {
-  return fs.existsSync(path.join(DATA_DIR, `${id}.json`))
+  return fs.existsSync(path.join(getChatbotsDir(), `${id}.json`))
 }
 
 export function allocateNewId() {
@@ -35,7 +32,7 @@ export function allocateNewId() {
  */
 export function saveRecord(id, record) {
   ensureDataDir()
-  const p = path.join(DATA_DIR, `${id}.json`)
+  const p = path.join(getChatbotsDir(), `${id}.json`)
   if (fs.existsSync(p)) {
     const err = new Error('CHATBOT_ID_TAKEN')
     /** @type {any} */ (err).code = 'CHATBOT_ID_TAKEN'
@@ -47,7 +44,7 @@ export function saveRecord(id, record) {
 /** @returns {object | null} */
 export function readRecord(id) {
   if (!/^\d{8}$/.test(String(id || ''))) return null
-  const p = path.join(DATA_DIR, `${String(id)}.json`)
+  const p = path.join(getChatbotsDir(), `${String(id)}.json`)
   if (!fs.existsSync(p)) return null
   try {
     return JSON.parse(fs.readFileSync(p, 'utf8'))
@@ -58,6 +55,6 @@ export function readRecord(id) {
 
 export function deleteRecord(id) {
   if (!/^\d{8}$/.test(String(id || ''))) return
-  const p = path.join(DATA_DIR, `${String(id)}.json`)
+  const p = path.join(getChatbotsDir(), `${String(id)}.json`)
   if (fs.existsSync(p)) fs.unlinkSync(p)
 }

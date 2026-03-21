@@ -1,12 +1,14 @@
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
-import { fileURLToPath } from 'url'
+import { getChatbotsDir } from './dataPaths.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const INDEX_PATH = path.join(__dirname, '..', 'data', 'chatbots', '_password_index.json')
+function indexPath() {
+  return path.join(getChatbotsDir(), '_password_index.json')
+}
 
 function loadIndex() {
+  const INDEX_PATH = indexPath()
   if (!fs.existsSync(INDEX_PATH)) {
     return { v: 1, map: {} }
   }
@@ -22,6 +24,7 @@ function loadIndex() {
 }
 
 function writeIndex(data) {
+  const INDEX_PATH = indexPath()
   fs.mkdirSync(path.dirname(INDEX_PATH), { recursive: true })
   fs.writeFileSync(INDEX_PATH, JSON.stringify(data, null, 2), 'utf8')
 }

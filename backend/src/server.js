@@ -12,6 +12,7 @@ import { deriveChatTheme, buildChatSystemPrompt } from './chatbotTestPrompt.js'
 import { runChatCompletion } from './chatWithOpenAI.js'
 import { saveTrialInquiry } from './trialInquiryStore.js'
 import { isContactMailConfigured, sendContactDemoEmails } from './sendContactDemoEmails.js'
+import { getDataRoot } from './dataPaths.js'
 
 const PORT = Number(process.env.PORT) || 3000
 /** 3-day trial from first save (or from legacy record createdAt) */
@@ -434,6 +435,7 @@ app.post('/api/scrape', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log('[cors] open — all origins allowed (origin: true)')
+  console.log('[data]', getDataRoot(), '— secured contexts & inquiries')
   console.log(`Scrape API listening on http://127.0.0.1:${PORT}`)
   console.log('POST /api/scrape with JSON { website, name, email, phone }')
   console.log('GET /api/chatbot-context/new-id — allocate 8-digit context ID')
