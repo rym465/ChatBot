@@ -385,6 +385,7 @@ export async function crawlWebsite(seedUrlString, opts = {}) {
       text: combined,
       rawLength: rawLengthApprox,
       crawl: {
+        engine: 'selenium',
         seedUrl: seed,
         pagesVisited: urlsVisited.length,
         urlsVisited,

@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import { crawlWebsite } from './scrapeWithSelenium.js'
+import { crawlWebsiteHttp } from './scrapeWithFetch.js'
 import { structureWebsiteForChatbot } from './structureWithOpenAI.js'
 import { encryptWithPassword, decryptWithPassword } from './encryptContextBundle.js'
 import { allocateNewId, saveRecord, readRecord, deleteRecord } from './chatbotContextStore.js'
@@ -359,7 +360,7 @@ app.post('/api/scrape', async (req, res) => {
     const md = Number(req.body?.crawlMaxDepth)
     if (!Number.isNaN(md) && md >= 0) crawlOpts.maxDepth = Math.min(md, 12)
 
-    const result = await crawlWebsite(target, crawlOpts)
+    const result = await crawlWebsiteWithFallback(target, crawlOpts)
 
     let structuredContext = null
     let structuredMeta = {
