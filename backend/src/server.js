@@ -47,6 +47,24 @@ app.use(
 )
 app.use(express.json({ limit: '15mb' }))
 
+/**
+ * Try Selenium crawl first; fall back to HTTP + HTML parse when Chrome/Driver is missing (typical on PaaS).
+ * Set SCRAPE_ENGINE=http to skip the browser entirely.
+ */
+async function crawlWebsiteWithFallback(seedUrl, crawlOpts) {
+  const mode = String(process.env.SCRAPE_ENGINE || '').trim().toLowerCase()
+  if (mode === 'http' || mode === 'fetch') {
+    return crawlWebsiteHttp(seedUrl, crawlOpts)
+  }
+  try {
+    return await crawlWebsite(seedUrl, crawlOpts)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn('[scrape] Selenium unavailable or failed, using HTTP crawl:', msg)
+    return crawlWebsiteHttp(seedUrl, crawlOpts)
+  }
+}
+
 function normalizeTargetUrl(input) {
   if (!input || typeof input !== 'string') return null
   let s = input.trim()

@@ -5,7 +5,8 @@
  * - Local dev: leave `''` so Vite proxies `/api/*` → http://127.0.0.1:3000 (see vite.config.js).
  * - Optional override: `VITE_API_BASE` in `.env` at build time — used only if `API_BASE_URL` here is empty.
  */
-export const API_BASE_URL = 'https://white-label-ai-chatbot-generator-ty.vercel.app'
+/** Production on Vercel: leave empty and set BACKEND_URL in Vercel so /api/* is proxied (see frontend/api/proxy.js). */
+export const API_BASE_URL = ''
 
 const fromFile = String(API_BASE_URL || '').trim().replace(/\/$/, '')
 const fromEnv = String(import.meta.env.VITE_API_BASE || '').trim().replace(/\/$/, '')
