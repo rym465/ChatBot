@@ -10,6 +10,7 @@ import { createTestSession, getTestSession, pushExchange } from './chatbotTestSe
 import { deriveChatTheme, buildChatSystemPrompt } from './chatbotTestPrompt.js'
 import { runChatCompletion } from './chatWithOpenAI.js'
 import { saveTrialInquiry } from './trialInquiryStore.js'
+import { isContactMailConfigured, sendContactDemoEmails } from './sendContactDemoEmails.js'
 
 const PORT = Number(process.env.PORT) || 3000
 /** 3-day trial from first save (or from legacy record createdAt) */
@@ -224,6 +225,38 @@ app.post('/api/chatbot-test/open', (req, res) => {
   }
 })
 
+const MAX_CONTACT_FIELD = 4000
+
+app.post('/api/contact-demo', async (req, res) => {
+  try {
+    if (!isContactMailConfigured()) {
+      return res.status(503).json({
+        ok: false,
+        error: 'Contact email is not configured on the server. Set CONTACT_GMAIL_USER and CONTACT_GMAIL_APP_PASSWORD.',
+      })
+    }
+
+    const b = req.body || {}
+    const businessName = typeof b.businessName === 'string' ? b.businessName.trim().slice(0, 200) : ''
+    const yourName = typeof b.yourName === 'string' ? b.yourName.trim().slice(0, 200) : ''
+    const email = typeof b.email === 'string' ? b.email.trim().slice(0, 320) : ''
+    const phone = typeof b.phone === 'string' ? b.phone.trim().slice(0, 80) : ''
+    const websiteUrl = typeof b.websiteUrl === 'string' ? b.websiteUrl.trim().slice(0, 500) : ''
+    const notes = typeof b.notes === 'string' ? b.notes.trim().slice(0, MAX_CONTACT_FIELD) : ''
+
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ ok: false, error: 'Please enter a valid email address.' })
+    }
+
+    await sendContactDemoEmails({ businessName, yourName, email, phone, websiteUrl, notes })
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('[contact-demo]', e)
+    const msg = e instanceof Error ? e.message : 'Failed to send email'
+    res.status(500).json({ ok: false, error: 'Could not send your request. Please try again later.' })
+  }
+})
+
 app.post('/api/trial-inquiry', (req, res) => {
   try {
     const { name, email, phone, message, chatbotId } = req.body || {}
@@ -389,6 +422,12 @@ app.listen(PORT, () => {
   console.log('POST /api/chatbot-context/save — password-encrypt & store scraped bundle')
   console.log('POST /api/chatbot-test/open (password only) | /api/chatbot-test/message — personal chat (3-day trial)')
   console.log('POST /api/trial-inquiry — contact form after trial')
+  console.log('POST /api/contact-demo — Request a demo (Nodemailer → owner + submitter)')
+  if (isContactMailConfigured()) {
+    console.log(`Contact demo mail: leads → ${process.env.CONTACT_GMAIL_USER} (visitor email from form for confirmation)`)
+  } else {
+    console.log('Contact demo mail: disabled (set CONTACT_GMAIL_USER + CONTACT_GMAIL_APP_PASSWORD)')
+  }
   if (usingDefaultPepper()) {
     console.warn(
       '[security] Set CONTEXT_PASSWORD_PEPPER in .env (long random string) so password→context lookup is unique to your server.',
