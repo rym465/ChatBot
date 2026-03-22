@@ -1207,6 +1207,11 @@ function DemoChatbotModal({ open, onClose }) {
 
         {phase === 'form' && (
           <form className="demo-modal__form" onSubmit={handleSubmit} noValidate>
+            <p className="demo-modal__owner-hint">
+              Your name, email, and phone are the <strong>website owner</strong> contact we store with this chatbot. If a
+              visitor asks who runs the business or how to reach the owner, the assistant will share these details
+              professionally.
+            </p>
             <div className="demo-field">
               <label className="demo-field__label" htmlFor="demo-name">
                 Name

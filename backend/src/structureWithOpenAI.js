@@ -9,20 +9,22 @@ const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 const MAX_SCRAPE_CHARS = 100_000
 
 const SYSTEM_PROMPT = `You are preparing structured knowledge for a customer-facing website chatbot.
-You ONLY use facts that appear in the provided scrape. Do not invent phone numbers, prices, guarantees, or locations.
-If something is unclear or missing, use null or empty arrays.
+Use ONLY facts from the scraped website text, EXCEPT when a "VERIFIED WEBSITE OWNER" line appears after the scrape—those name/email/phone values are authoritative and must be copied exactly into websiteOwnerContact (and may also appear in contact.phones / contact.emails when appropriate).
+Do not invent other phone numbers, prices, guarantees, or locations.
+If something is unclear or missing from the scrape, use null or empty arrays.
 
 Return a single JSON object with exactly these keys (all required):
-- businessSummary: string, 2-5 sentences in plain English
+- businessSummary: string, 2-5 sentences in plain English (you may mention that direct owner contact is listed under websiteOwnerContact when that block is filled)
 - inferredBusinessName: string or null
 - servicesOrOfferings: array of short strings
 - serviceAreasOrLocations: array of short strings
 - hoursAndAvailability: string or null
-- contact: { "phones": string[], "emails": string[], "addresses": string[], "otherLinks": string[] }
+- contact: { "phones": string[], "emails": string[], "addresses": string[], "otherLinks": string[] } (from site text; may include owner phone/email when the verified owner line lists them)
+- websiteOwnerContact: { "name": string|null, "email": string|null, "phone": string|null } — copy exactly from the verified owner line when present; otherwise all null
 - faqs: array of { "question": string, "answer": string } (only if clearly Q&A on page; else [])
 - policiesGuaranteesOrWarranties: string[] (short bullets)
 - emergencyOrUrgencyNotes: string or null (e.g. 24/7, after-hours)
-- topicsCustomerMightAsk: string[] (likely user questions, grounded in text)
+- topicsCustomerMightAsk: string[] (likely user questions, grounded in text; may include "how do I contact the owner" when websiteOwnerContact is filled)
 - thingsTheBotShouldNotClaim: string[] (e.g. exact prices if not listed)
 - confidenceNote: string, one sentence about how complete the scrape seems
 
@@ -59,7 +61,7 @@ export async function structureWebsiteForChatbot(input) {
 
   const ownerBlock =
     input.owner && (input.owner.name || input.owner.email || input.owner.phone)
-      ? `\n\nBusiness owner contact (from form, not from website): name=${input.owner.name || ''}, email=${input.owner.email || ''}, phone=${input.owner.phone || ''}`
+      ? `\n\nVERIFIED WEBSITE OWNER (intake form — copy into websiteOwnerContact exactly; use for visitor questions about the owner): name=${input.owner.name || ''}, email=${input.owner.email || ''}, phone=${input.owner.phone || ''}`
       : ''
 
   const userContent = `Page URL: ${input.url}

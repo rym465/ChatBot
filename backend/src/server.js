@@ -81,6 +81,29 @@ function normalizeTargetUrl(input) {
   return u.href
 }
 
+function normalizeWebsiteOwnerContact(owner) {
+  const name = typeof owner?.name === 'string' ? owner.name.trim() : ''
+  const email = typeof owner?.email === 'string' ? owner.email.trim() : ''
+  const phone = typeof owner?.phone === 'string' ? owner.phone.trim() : ''
+  return {
+    name: name || null,
+    email: email || null,
+    phone: phone || null,
+  }
+}
+
+/** Ensures structured JSON always carries verified intake owner details for the chatbot. */
+function attachWebsiteOwnerContact(structured, owner) {
+  const woc = normalizeWebsiteOwnerContact(owner)
+  const has = !!(woc.name || woc.email || woc.phone)
+  if (structured && typeof structured === 'object' && !Array.isArray(structured)) {
+    if (has) return { ...structured, websiteOwnerContact: woc }
+    return structured
+  }
+  if (has) return { websiteOwnerContact: woc }
+  return structured
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'scrape-api' })
 })
@@ -408,6 +431,8 @@ app.post('/api/scrape', async (req, res) => {
         console.error('[structure]', e)
       }
     }
+
+    structuredContext = attachWebsiteOwnerContact(structuredContext, ownerContact)
 
     res.json({
       ok: true,

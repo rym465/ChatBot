@@ -2004,6 +2004,22 @@
   opacity: 0.5;
 }
 
+.demo-modal__owner-hint {
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  background: var(--surface-2, hsl(220 20% 97%));
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle, hsl(220 14% 90%));
+}
+
+.demo-modal__owner-hint strong {
+  color: var(--text, inherit);
+  font-weight: 600;
+}
+
 .demo-modal__result-contact {
   margin: 0;
   font-size: 0.75rem;
