@@ -250,12 +250,8 @@ export default function App() {
       const nextThreads = Array.isArray(data.threads) ? data.threads : []
       setThreads(nextThreads)
       setMessages([])
-      if (nextThreads[0]?.thread_id) {
-        setThreadId(nextThreads[0].thread_id)
-        await loadMessagesForThread(nextThreads[0].thread_id, nextThreads[0].chatbot_id)
-      } else {
-        setThreadId('')
-      }
+      // Do not auto-open chat; user must click a thread/bot row first.
+      setThreadId('')
     } catch (e) {
       setThreads([])
       setMessages([])
@@ -609,7 +605,9 @@ export default function App() {
                 <div className="split__right">
                   <p className="subhead">Messages</p>
                   <div className="messages">
-                    {messages.length ? (
+                    {!threadId ? (
+                      <div className="empty-box">Click a bot/thread in the left list to view chat messages.</div>
+                    ) : messages.length ? (
                       messages.map((m) => (
                         <div key={m.id} className={`msg msg--${m.role}`}>
                           <div className="msg__meta">
@@ -628,7 +626,7 @@ export default function App() {
                         </div>
                       ))
                     ) : (
-                      <div className="empty-box">Select a thread to view messages.</div>
+                      <div className="empty-box">No messages in this thread yet.</div>
                     )}
                   </div>
                 </div>
