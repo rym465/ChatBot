@@ -8,7 +8,33 @@ import {
   CHAT_TEST_BASE,
   TRIAL_INQUIRY_API,
   CONTACT_DEMO_API,
+  ADMIN_SETTINGS_API,
 } from './api.js'
+
+function chatDayLabel(iso) {
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return ''
+    return d.toLocaleDateString(undefined, {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+  } catch {
+    return ''
+  }
+}
+
+function chatTimeLabel(iso) {
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return ''
+    return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  } catch {
+    return ''
+  }
+}
 
 function useReveal() {
   const ref = useRef(null)
@@ -240,7 +266,7 @@ const TESTIMONIALS = [
   },
 ]
 
-const PLANS = [
+const PLANS_BASE = [
   {
     name: 'Starter',
     price: '$299',
@@ -1452,6 +1478,8 @@ function TestChatUnlockModal({ open, onClose, onSuccess }) {
       }
       onSuccess({
         sessionId: data.sessionId,
+        threadId: data.threadId || '',
+        chatHistory: Array.isArray(data.chatHistory) ? data.chatHistory : [],
         theme: data.theme,
         trialEndsAt: data.trialEndsAt || '',
         trialExpired: !!data.trialExpired,
@@ -1531,7 +1559,9 @@ function TestChatUnlockModal({ open, onClose, onSuccess }) {
 function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSession }) {
   const [sessionId, setSessionId] = useState('')
   const [theme, setTheme] = useState(null)
-  const [messages, setMessages] = useState([])
+  const [allHistory, setAllHistory] = useState([])
+  const [threadId, setThreadId] = useState('')
+  const [dockView, setDockView] = useState('chat')
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [chatErr, setChatErr] = useState('')
@@ -1557,11 +1587,30 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
 
   const trialEnded = trialExpiredAtOpen || trialRanOut
 
+  const chatMessages = useMemo(() => {
+    const tid = threadId
+    return allHistory
+      .filter((m) => m.threadId === tid)
+      .slice()
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+  }, [allHistory, threadId])
+
+  const historyMessages = useMemo(() => {
+    return allHistory.slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+  }, [allHistory])
+
+  const listToShow = useMemo(
+    () => (dockView === 'history' ? historyMessages : chatMessages),
+    [dockView, historyMessages, chatMessages],
+  )
+
   useEffect(() => {
     if (!session) {
       setSessionId('')
       setTheme(null)
-      setMessages([])
+      setAllHistory([])
+      setThreadId('')
+      setDockView('chat')
       setDraft('')
       setSending(false)
       setChatErr('')
@@ -1589,7 +1638,9 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
     setTrialRanOut(false)
     setCompanyContact(session.companyContact || null)
     setChatbotId(session.chatbotId || '')
-    setMessages([])
+    setThreadId(session.threadId || '')
+    setAllHistory(Array.isArray(session.chatHistory) ? session.chatHistory : [])
+    setDockView('chat')
     setDraft('')
     setChatErr('')
     setIqDone(false)
@@ -1601,7 +1652,31 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
     const el = listRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
-  }, [messages, sending, trialEnded, panelOpen])
+  }, [listToShow, sending, trialEnded, panelOpen, dockView])
+
+  useEffect(() => {
+    if (!panelOpen || dockView !== 'history' || !sessionId || trialEnded) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`${CHAT_TEST_BASE}/history`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!cancelled && res.ok && data.ok && Array.isArray(data.messages)) {
+          setAllHistory(data.messages)
+          if (typeof data.threadId === 'string' && data.threadId) setThreadId(data.threadId)
+        }
+      } catch {
+        /* ignore */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [panelOpen, dockView, sessionId, trialEnded])
 
   useEffect(() => {
     if (!session || trialEnded || !trialEndsAtIso) return
@@ -1647,7 +1722,13 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
     if (!text || sending || !sessionId || trialEnded) return
     setChatErr('')
     setDraft('')
-    setMessages((prev) => [...prev, { role: 'user', text }])
+    const optimisticThreadId = threadId || `session-${sessionId}`
+    const tempId = `temp-${Date.now()}`
+    const nowIso = new Date().toISOString()
+    setAllHistory((prev) => [
+      ...prev,
+      { id: tempId, threadId: optimisticThreadId, role: 'user', content: text, createdAt: nowIso },
+    ])
     setSending(true)
     try {
       const res = await fetch(`${CHAT_TEST_BASE}/message`, {
@@ -1658,7 +1739,7 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
       const data = await res.json().catch(() => ({}))
       if (res.status === 403 && data.trialExpired) {
         setTrialRanOut(true)
-        setMessages((prev) => prev.slice(0, -1))
+        setAllHistory((prev) => prev.filter((m) => m.id !== tempId))
         setDraft(text)
         return
       }
@@ -1666,17 +1747,91 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
         const apiErr = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : ''
         throw new Error(apiErr || '__CHAT_GENERIC__')
       }
-      setMessages((prev) => [...prev, { role: 'assistant', text: data.reply }])
+      const tid = typeof data.threadId === 'string' && data.threadId ? data.threadId : optimisticThreadId
+      if (tid !== threadId) setThreadId(tid)
+      const reply = typeof data.reply === 'string' ? data.reply : ''
+      if (data.saved && data.saved.user && data.saved.assistant) {
+        setAllHistory((prev) => {
+          const rest = prev.filter((m) => m.id !== tempId)
+          return [
+            ...rest,
+            {
+              id: String(data.saved.user.id),
+              threadId: tid,
+              role: 'user',
+              content: text,
+              createdAt: data.saved.user.createdAt,
+            },
+            {
+              id: String(data.saved.assistant.id),
+              threadId: tid,
+              role: 'assistant',
+              content: reply,
+              createdAt: data.saved.assistant.createdAt,
+            },
+          ]
+        })
+      } else {
+        setAllHistory((prev) => {
+          const rest = prev.filter((m) => m.id !== tempId)
+          const t = new Date().toISOString()
+          return [
+            ...rest,
+            { id: `local-u-${tempId}`, threadId: tid, role: 'user', content: text, createdAt: nowIso },
+            { id: `local-a-${tempId}`, threadId: tid, role: 'assistant', content: reply, createdAt: t },
+          ]
+        })
+      }
     } catch (err) {
       const m = err instanceof Error ? err.message : ''
       const fallback = 'Message didn’t go through. Try again.'
       setChatErr(m === '__CHAT_GENERIC__' ? fallback : publicErrorMessage(m, fallback))
-      setMessages((prev) => prev.slice(0, -1))
+      setAllHistory((prev) => prev.filter((x) => x.id !== tempId))
       setDraft(text)
     } finally {
       setSending(false)
     }
   }
+
+  const handleClearChat = async () => {
+    if (!sessionId || trialEnded) return
+    if (
+      !window.confirm(
+        'Start a fresh conversation in this window? Saved messages stay under “Full history” and download.',
+      )
+    ) {
+      return
+    }
+    try {
+      const res = await fetch(`${CHAT_TEST_BASE}/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.ok && data.threadId) {
+        setThreadId(data.threadId)
+        setDockView('chat')
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const handleDownloadChat = useCallback(() => {
+    const rows = historyMessages
+    if (!rows.length) return
+    const lines = rows.map(
+      (m) => `${chatTimeLabel(m.createdAt)} [${m.role}] ${String(m.content).replace(/\r?\n/g, ' ')}`,
+    )
+    const blob = new Blob([lines.join('\n\n')], { type: 'text/plain;charset=utf-8' })
+    const a = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    a.href = url
+    a.download = `chatbot-history-${chatbotId || 'export'}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [historyMessages, chatbotId])
 
   const handleInquiry = async (ev) => {
     ev.preventDefault()
@@ -2066,38 +2221,140 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
             </div>
           ) : (
             <>
-              <div ref={listRef} className="chat-personal__messages">
+              <div
+                className="chat-widget-dock__subbar"
+                role="toolbar"
+                aria-label="Chat navigation and export"
+                style={{
+                  borderColor: col.surfaceBorder,
+                  color: col.text,
+                  background: `color-mix(in srgb, ${col.surface || '#fff'} 94%, transparent)`,
+                }}
+              >
+                <div className="chat-widget-dock__tabs">
+                  <button
+                    type="button"
+                    className={`chat-widget-dock__tab${dockView === 'chat' ? ' is-on' : ''}`}
+                    onClick={() => setDockView('chat')}
+                  >
+                    Chat
+                  </button>
+                  <button
+                    type="button"
+                    className={`chat-widget-dock__tab${dockView === 'history' ? ' is-on' : ''}`}
+                    onClick={() => setDockView('history')}
+                  >
+                    Full history
+                  </button>
+                </div>
+                <div className="chat-widget-dock__tool-btns">
+                  <button
+                    type="button"
+                    className="chat-widget-dock__tool-btn"
+                    onClick={handleDownloadChat}
+                    disabled={!historyMessages.length}
+                    title="Download full history (.txt)"
+                    aria-label="Download full chat history"
+                  >
+                    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                      <path
+                        fill="currentColor"
+                        d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"
+                      />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    className="chat-widget-dock__tool-btn"
+                    onClick={handleClearChat}
+                    title="Clear current chat (saved in Full history)"
+                    aria-label="Clear current chat"
+                  >
+                    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                      <path
+                        fill="currentColor"
+                        d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div
+                ref={listRef}
+                className={`chat-personal__messages${dockView === 'history' ? ' chat-personal__messages--history' : ''}`}
+              >
                 <div className="chat-personal__messages-col">
-                  {messages.map((m, i) => (
-                    <div key={`${i}-${m.role}`} className={`chat-personal__row chat-personal__row--${m.role}`}>
-                      {m.role === 'assistant' ? <div className="chat-personal__rail" aria-hidden="true" /> : null}
-                      <div className={`chat-personal__bubble-wrap chat-personal__bubble-wrap--${m.role}`}>
-                        <div
-                          className={`chat-personal__bubble ${m.role === 'assistant' ? 'chat-personal__bubble--assistant' : 'chat-personal__bubble--user'}`}
-                          style={
-                            m.role === 'user'
-                              ? {
-                                  background: 'var(--cp-send-bg)',
-                                  color: 'var(--cp-send-text)',
-                                  borderColor: 'transparent',
-                                }
-                              : {
-                                  background: 'var(--cp-bot-bubble)',
-                                  color: 'var(--cp-text)',
-                                  borderColor: 'var(--cp-border)',
-                                }
-                          }
-                        >
-                          {m.role === 'assistant' ? (
-                            <ChatAssistantMarkdown text={m.text} />
-                          ) : (
-                            m.text
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {sending ? (
+                  {listToShow.length === 0 && !sending ? (
+                    <p
+                      className="chat-personal__empty-hint"
+                      style={{ color: col.textMuted || col.text, opacity: 0.85 }}
+                    >
+                      {dockView === 'history'
+                        ? 'No messages yet. They appear here as you chat.'
+                        : 'Say hello to start.'}
+                    </p>
+                  ) : null}
+                  {(() => {
+                    let lastDay = ''
+                    const out = []
+                    for (const m of listToShow) {
+                      const day = chatDayLabel(m.createdAt)
+                      if (day && day !== lastDay) {
+                        lastDay = day
+                        out.push(
+                          <div
+                            key={`day-${day}-${m.id}`}
+                            className="chat-personal__day-label"
+                            role="separator"
+                            style={{
+                              color: col.textMuted || col.text,
+                              borderColor: col.surfaceBorder,
+                            }}
+                          >
+                            {day}
+                          </div>,
+                        )
+                      }
+                      out.push(
+                        <div key={m.id} className={`chat-personal__row chat-personal__row--${m.role}`}>
+                          {m.role === 'assistant' ? <div className="chat-personal__rail" aria-hidden="true" /> : null}
+                          <div className={`chat-personal__bubble-wrap chat-personal__bubble-wrap--${m.role}`}>
+                            <div
+                              className={`chat-personal__bubble ${m.role === 'assistant' ? 'chat-personal__bubble--assistant' : 'chat-personal__bubble--user'}`}
+                              style={
+                                m.role === 'user'
+                                  ? {
+                                      background: 'var(--cp-send-bg)',
+                                      color: 'var(--cp-send-text)',
+                                      borderColor: 'transparent',
+                                    }
+                                  : {
+                                      background: 'var(--cp-bot-bubble)',
+                                      color: 'var(--cp-text)',
+                                      borderColor: 'var(--cp-border)',
+                                    }
+                              }
+                            >
+                              {m.role === 'assistant' ? (
+                                <ChatAssistantMarkdown text={m.content} />
+                              ) : (
+                                m.content
+                              )}
+                            </div>
+                            <time
+                              className="chat-personal__msg-time"
+                              dateTime={m.createdAt}
+                              style={{ color: col.textMuted || col.text }}
+                            >
+                              {chatTimeLabel(m.createdAt)}
+                            </time>
+                          </div>
+                        </div>,
+                      )
+                    }
+                    return out
+                  })()}
+                  {sending && dockView === 'chat' ? (
                     <div className="chat-personal__row chat-personal__row--assistant">
                       <div className="chat-personal__rail" aria-hidden="true" />
                       <div className="chat-personal__bubble-wrap chat-personal__bubble-wrap--assistant">
@@ -2127,44 +2384,46 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
                   {chatErr}
                 </p>
               ) : null}
-              <form
-                className="chat-personal__composer"
-                onSubmit={handleSend}
-                style={{
-                  borderTopColor: 'transparent',
-                  background: 'transparent',
-                }}
-              >
-                <div className="chat-personal__composer-inner">
-                  <input
-                    className="chat-personal__input"
-                    placeholder="Message…"
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    disabled={sending}
-                    aria-label="Message"
-                    style={{
-                      color: col.text,
-                      backgroundColor: 'transparent',
-                    }}
-                  />
-                  <button
-                    type="submit"
-                    className="chat-personal__send"
-                    disabled={sending || !draft.trim()}
-                    aria-label="Send message"
-                    title="Send"
-                    style={{ backgroundColor: col.sendBg, color: col.sendText }}
-                  >
-                    <svg className="chat-personal__send-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-                      <path
-                        fill="currentColor"
-                        d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.98.98 0 00-1.39 1.15L4.98 12 2 18.25a.98.98 0 001.39 1.15z"
-                      />
-                    </svg>
-                  </button>
-                </div>
-              </form>
+              {dockView === 'chat' ? (
+                <form
+                  className="chat-personal__composer"
+                  onSubmit={handleSend}
+                  style={{
+                    borderTopColor: 'transparent',
+                    background: 'transparent',
+                  }}
+                >
+                  <div className="chat-personal__composer-inner">
+                    <input
+                      className="chat-personal__input"
+                      placeholder="Message…"
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      disabled={sending}
+                      aria-label="Message"
+                      style={{
+                        color: col.text,
+                        backgroundColor: 'transparent',
+                      }}
+                    />
+                    <button
+                      type="submit"
+                      className="chat-personal__send"
+                      disabled={sending || !draft.trim()}
+                      aria-label="Send message"
+                      title="Send"
+                      style={{ backgroundColor: col.sendBg, color: col.sendText }}
+                    >
+                      <svg className="chat-personal__send-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                        <path
+                          fill="currentColor"
+                          d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.98.98 0 00-1.39 1.15L4.98 12 2 18.25a.98.98 0 001.39 1.15z"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                </form>
+              ) : null}
             </>
           )}
         </div>
@@ -2246,6 +2505,8 @@ export default function LandingPage() {
   const [testChatPanelOpen, setTestChatPanelOpen] = useState(false)
   const [contactSending, setContactSending] = useState(false)
   const [contactFeedback, setContactFeedback] = useState(null)
+  const [adminTheme, setAdminTheme] = useState({ red: '#dc2626', black: '#000000', white: '#ffffff' })
+  const [adminPricing, setAdminPricing] = useState({ starter: 299, growth: 499, pro: 799 })
 
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   const openDemoModal = useCallback(() => {
@@ -2268,6 +2529,60 @@ export default function LandingPage() {
     setTestChatSession(null)
     setTestChatPanelOpen(false)
   }, [])
+
+  useEffect(() => {
+    let alive = true
+    async function load() {
+      try {
+        const res = await fetch(ADMIN_SETTINGS_API)
+        const data = await res.json().catch(() => ({}))
+        if (!alive) return
+        if (!res.ok || !data.ok || !data.settings) return
+        if (data.settings.theme) {
+          setAdminTheme((t) => ({
+            ...t,
+            ...(data.settings.theme || {}),
+          }))
+        }
+        if (data.settings.pricing) {
+          const p = data.settings.pricing || {}
+          setAdminPricing((prev) => ({
+            starter: typeof p.starter === 'number' ? p.starter : prev.starter,
+            growth: typeof p.growth === 'number' ? p.growth : prev.growth,
+            pro: typeof p.pro === 'number' ? p.pro : prev.pro,
+          }))
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    load()
+    const id = setInterval(load, 8000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [])
+
+  const landingStyle = useMemo(
+    () => ({
+      '--red': adminTheme.red,
+      '--black': adminTheme.black,
+      '--white': adminTheme.white,
+    }),
+    [adminTheme],
+  )
+
+  const plans = useMemo(() => {
+    const toMoney = (v) => (typeof v === 'number' && Number.isFinite(v) ? `$${v}` : null)
+    const p = adminPricing || {}
+    return PLANS_BASE.map((pl) => {
+      const v =
+        pl.name === 'Starter' ? toMoney(p.starter) : pl.name === 'Growth' ? toMoney(p.growth) : pl.name === 'Pro' ? toMoney(p.pro) : null
+      if (!v) return pl
+      return { ...pl, price: v }
+    })
+  }, [adminPricing])
 
   const handleContactDemoSubmit = useCallback(async (e) => {
     e.preventDefault()
@@ -2337,7 +2652,7 @@ export default function LandingPage() {
   }, [menuOpen])
 
   return (
-    <div className="landing">
+    <div className="landing" style={landingStyle}>
       <div className="landing__bg" aria-hidden />
 
       {menuOpen ? (
@@ -2748,7 +3063,7 @@ export default function LandingPage() {
               </p>
             </Reveal>
             <div className="pricing-grid">
-              {PLANS.map((p, i) => (
+              {plans.map((p, i) => (
                 <Reveal key={p.name} delay={i * 90}>
                   <article className={`price-card ${p.highlighted ? 'price-card--featured' : ''}`}>
                     {p.highlighted && <span className="price-card__badge">Most popular</span>}

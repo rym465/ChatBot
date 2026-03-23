@@ -3,7 +3,7 @@
   --black: #000000;
   --white: #ffffff;
   --red: #dc2626;
-  --red-deep: #7f1d1d;
+  --red-deep: color-mix(in srgb, var(--red) 60%, var(--black));
   --green: #15803d;
   /* Legacy --blue-* = red accent scale (keeps existing component rules on-brand) */
   --blue-950: var(--black);
@@ -2845,6 +2845,98 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.chat-widget-dock__subbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  flex-shrink: 0;
+}
+
+.chat-widget-dock__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.chat-widget-dock__tab {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.72;
+}
+
+.chat-widget-dock__tab:hover {
+  opacity: 1;
+}
+
+.chat-widget-dock__tab.is-on {
+  opacity: 1;
+  border-color: color-mix(in srgb, currentColor 35%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.chat-widget-dock__tool-btns {
+  display: flex;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.chat-widget-dock__tool-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 10px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: inherit;
+  cursor: pointer;
+}
+
+.chat-widget-dock__tool-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.chat-widget-dock__tool-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.chat-personal__day-label {
+  text-align: center;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.65rem 0.5rem 0.35rem;
+  margin: 0 auto;
+  max-width: 95%;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.chat-personal__msg-time {
+  display: block;
+  font-size: 0.62rem;
+  margin-top: 0.28rem;
+  opacity: 0.88;
+}
+
+.chat-personal__empty-hint {
+  text-align: center;
+  font-size: 0.8rem;
+  padding: 1.25rem 1rem;
+  margin: 0;
 }
 
 /* Dock: appearance (7 themes) + reply tone — red / black / white */

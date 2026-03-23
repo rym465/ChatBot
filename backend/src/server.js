@@ -5,9 +5,18 @@ import { crawlWebsite } from './scrapeWithSelenium.js'
 import { crawlWebsiteHttp } from './scrapeWithFetch.js'
 import { structureWebsiteForChatbot } from './structureWithOpenAI.js'
 import { encryptWithPassword, decryptWithPassword } from './encryptContextBundle.js'
-import { allocateNewId, saveRecord, readRecord, deleteRecord } from './chatbotContextStore.js'
-import { registerPasswordLookup, resolveChatbotIdByPassword, usingDefaultPepper } from './passwordLookup.js'
-import { createTestSession, getTestSession, pushExchange } from './chatbotTestSession.js'
+import {
+  allocateNewChatbotId,
+  persistChatbotRecord,
+  readChatbotRecord,
+  deleteChatbotRecord,
+  resolveChatbotIdByPasswordAsync,
+  isDatabaseEnabled,
+} from './chatbotPersistence.js'
+import { usingDefaultPepper } from './passwordLookup.js'
+import { dbHealthCheck, describeDatabaseUrlForLog, getPool } from './dbPool.js'
+import { createTestSession, getTestSession, pushExchange, startNewChatThread } from './chatbotTestSession.js'
+import { appendChatExchange, listChatMessages } from './chatbotChatHistory.js'
 import {
   deriveChatTheme,
   buildChatSystemPrompt,
@@ -86,6 +95,42 @@ function normalizeTargetUrl(input) {
   return u.href
 }
 
+function canonicalWebsiteUrl(input) {
+  const n = normalizeTargetUrl(input)
+  if (!n) return null
+  try {
+    const u = new URL(n)
+    u.hash = ''
+    if ((u.protocol === 'https:' && u.port === '443') || (u.protocol === 'http:' && u.port === '80')) u.port = ''
+    u.pathname = u.pathname.replace(/\/+$/, '') || '/'
+    return u.href.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+async function ensureAdminSettingsSchema(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.admin_settings (
+      id TEXT PRIMARY KEY,
+      settings_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `)
+}
+
+async function getAdminSettings(pool) {
+  await ensureAdminSettingsSchema(pool)
+  const r = await pool.query(`SELECT settings_json FROM public.admin_settings WHERE id = 'global' LIMIT 1`)
+  const defaults = {
+    theme: { red: '#dc2626', black: '#000000', white: '#ffffff' },
+    // Match the landing page defaults ($299 / $499 / $799)
+    pricing: { starter: 299, growth: 499, pro: 799, currency: 'USD' },
+  }
+  const saved = r.rowCount ? r.rows[0].settings_json : {}
+  return { ...defaults, ...(saved || {}) }
+}
+
 function normalizeWebsiteOwnerContact(owner) {
   const name = typeof owner?.name === 'string' ? owner.name.trim() : ''
   const email = typeof owner?.email === 'string' ? owner.email.trim() : ''
@@ -109,15 +154,21 @@ function attachWebsiteOwnerContact(structured, owner) {
   return structured
 }
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'scrape-api' })
+app.get('/api/health', async (_req, res) => {
+  const db = isDatabaseEnabled() ? await dbHealthCheck() : { ok: false, skipped: true }
+  res.json({
+    ok: true,
+    service: 'scrape-api',
+    chatbotStore: isDatabaseEnabled() ? 'postgres' : 'filesystem',
+    database: db,
+  })
 })
 
 const CHATBOT_ID_RE = /^\d{8}$/
 
-app.get('/api/chatbot-context/new-id', (_req, res) => {
+app.get('/api/chatbot-context/new-id', async (_req, res) => {
   try {
-    const chatbotId = allocateNewId()
+    const chatbotId = await allocateNewChatbotId()
     res.json({ ok: true, chatbotId })
   } catch (e) {
     console.error('[chatbot-context/new-id]', e)
@@ -125,7 +176,7 @@ app.get('/api/chatbot-context/new-id', (_req, res) => {
   }
 })
 
-app.post('/api/chatbot-context/save', (req, res) => {
+app.post('/api/chatbot-context/save', async (req, res) => {
   try {
     const { chatbotId, password, payload } = req.body || {}
 
@@ -174,16 +225,21 @@ app.post('/api/chatbot-context/save', (req, res) => {
       chatbotId: id,
       createdAt: inner.savedAt,
       trialEndsAt,
+      websiteUrl: inner.websiteUrl || '',
+      owner: {
+        name: inner.owner?.name || '',
+        email: inner.owner?.email || '',
+        phone: inner.owner?.phone || '',
+      },
       encrypted,
       note: 'Decrypt only with your password using the same algorithm (AES-256-GCM + scrypt).',
     }
 
-    saveRecord(id, record)
     try {
-      registerPasswordLookup(pw, id)
+      await persistChatbotRecord(id, pw, record)
     } catch (regErr) {
-      deleteRecord(id)
       if (regErr && typeof regErr === 'object' && 'code' in regErr && regErr.code === 'PASSWORD_LOOKUP_TAKEN') {
+        await deleteChatbotRecord(id)
         return res.status(409).json({
           ok: false,
           error:
@@ -213,7 +269,7 @@ app.post('/api/chatbot-context/save', (req, res) => {
   }
 })
 
-app.post('/api/chatbot-test/open', (req, res) => {
+app.post('/api/chatbot-test/open', async (req, res) => {
   try {
     const { password } = req.body || {}
     const pw = typeof password === 'string' ? password : ''
@@ -221,7 +277,7 @@ app.post('/api/chatbot-test/open', (req, res) => {
       return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters' })
     }
 
-    const chatbotId = resolveChatbotIdByPassword(pw)
+    const chatbotId = await resolveChatbotIdByPasswordAsync(pw)
     if (!chatbotId) {
       return res.status(401).json({
         ok: false,
@@ -230,9 +286,12 @@ app.post('/api/chatbot-test/open', (req, res) => {
       })
     }
 
-    const record = readRecord(chatbotId)
+    const record = await readChatbotRecord(chatbotId)
     if (!record || !record.encrypted) {
-      return res.status(404).json({ ok: false, error: 'Saved context file is missing. Try saving your website context again.' })
+      return res.status(404).json({
+        ok: false,
+        error: 'Saved context was not found. Try saving your website context again.',
+      })
     }
 
     let inner
@@ -253,11 +312,20 @@ app.post('/api/chatbot-test/open', (req, res) => {
     const theme = deriveChatTheme(inner)
     const trialEndsAt = trialEndsAtFromRecord(record)
     const trialExpired = Date.now() >= Date.parse(trialEndsAt)
-    const sessionId = createTestSession(inner, trialEndsAt)
+    const { sessionId, threadId } = createTestSession(inner, trialEndsAt, chatbotId)
+
+    let chatHistory = []
+    try {
+      chatHistory = await listChatMessages(chatbotId)
+    } catch (e) {
+      console.warn('[chatbot-test/open] load chat history', e)
+    }
 
     res.json({
       ok: true,
       sessionId,
+      threadId,
+      chatHistory,
       theme,
       chatbotId,
       trialEndsAt,
@@ -303,14 +371,14 @@ app.post('/api/contact-demo', async (req, res) => {
   }
 })
 
-app.post('/api/trial-inquiry', (req, res) => {
+app.post('/api/trial-inquiry', async (req, res) => {
   try {
     const { name, email, phone, message, chatbotId } = req.body || {}
     const em = typeof email === 'string' ? email.trim() : ''
     if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
       return res.status(400).json({ ok: false, error: 'Valid email is required' })
     }
-    saveTrialInquiry({
+    await saveTrialInquiry({
       name: typeof name === 'string' ? name.trim() : '',
       email: em,
       phone: typeof phone === 'string' ? phone.trim() : '',
@@ -376,11 +444,61 @@ app.post('/api/chatbot-test/message', async (req, res) => {
 
     pushExchange(s, userMsg, reply)
 
-    res.json({ ok: true, reply, model })
+    let saved = null
+    if (s.chatbotId && s.threadId && /^\d{8}$/.test(String(s.chatbotId))) {
+      try {
+        saved = await appendChatExchange(s.chatbotId, s.threadId, userMsg, reply)
+      } catch (err) {
+        console.warn('[chatbot-test/message] chat history persist failed:', err)
+      }
+    }
+
+    res.json({
+      ok: true,
+      reply,
+      model,
+      threadId: s.threadId,
+      saved,
+    })
   } catch (e) {
     console.error('[chatbot-test/message]', e)
     const msg = e instanceof Error ? e.message : 'Chat failed'
     res.status(500).json({ ok: false, error: msg })
+  }
+})
+
+app.post('/api/chatbot-test/history', async (req, res) => {
+  try {
+    const { sessionId } = req.body || {}
+    if (!sessionId || typeof sessionId !== 'string') {
+      return res.status(400).json({ ok: false, error: 'Missing session' })
+    }
+    const s = getTestSession(sessionId)
+    if (!s || !s.chatbotId || !/^\d{8}$/.test(String(s.chatbotId))) {
+      return res.status(401).json({ ok: false, error: 'Session expired or invalid. Unlock again with your password.' })
+    }
+    const messages = await listChatMessages(s.chatbotId)
+    res.json({ ok: true, messages, threadId: s.threadId })
+  } catch (e) {
+    console.error('[chatbot-test/history]', e)
+    res.status(500).json({ ok: false, error: 'Could not load history' })
+  }
+})
+
+app.post('/api/chatbot-test/clear', async (req, res) => {
+  try {
+    const { sessionId } = req.body || {}
+    if (!sessionId || typeof sessionId !== 'string') {
+      return res.status(400).json({ ok: false, error: 'Missing session' })
+    }
+    const newThreadId = startNewChatThread(sessionId)
+    if (!newThreadId) {
+      return res.status(401).json({ ok: false, error: 'Session expired or invalid. Unlock again with your password.' })
+    }
+    res.json({ ok: true, threadId: newThreadId })
+  } catch (e) {
+    console.error('[chatbot-test/clear]', e)
+    res.status(500).json({ ok: false, error: 'Could not clear chat' })
   }
 })
 
@@ -394,6 +512,35 @@ app.post('/api/scrape', async (req, res) => {
 
   if (!target) {
     return res.status(400).json({ ok: false, error: 'Invalid or missing website URL' })
+  }
+  const websiteKey = canonicalWebsiteUrl(target)
+
+  // Rule: expired accounts cannot re-scrape the same website URL.
+  if (websiteKey && isDatabaseEnabled()) {
+    try {
+      const pool = getPool()
+      if (pool) {
+        const hit = await pool.query(
+          `SELECT chatbot_id, trial_ends_at
+           FROM public.chatbot_contexts
+           WHERE lower(regexp_replace(coalesce(record_json->>'websiteUrl', ''), '/+$', '')) = $1
+             AND trial_ends_at <= now()
+           ORDER BY trial_ends_at DESC
+           LIMIT 1`,
+          [websiteKey.replace(/\/+$/, '')],
+        )
+        if (hit.rowCount) {
+          return res.status(403).json({
+            ok: false,
+            trialExpired: true,
+            error:
+              'This website already has an expired chatbot trial. Contact admin to renew before scraping again.',
+          })
+        }
+      }
+    } catch (e) {
+      console.warn('[scrape] expired-site check failed, continuing:', e)
+    }
   }
 
   const ownerContact = {
@@ -439,7 +586,8 @@ app.post('/api/scrape', async (req, res) => {
       }
     }
 
-    structuredContext = attachWebsiteOwnerContact(structuredContext, ownerContact)
+    // Owner personal details must not be injected into the knowledge bundle.
+    // Chat responses should be grounded ONLY in scraped website text.
 
     res.json({
       ok: true,
@@ -465,14 +613,315 @@ app.post('/api/scrape', async (req, res) => {
   }
 })
 
-app.listen(PORT, () => {
+app.get('/api/admin/metrics', async (_req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for admin metrics' })
+    const [chatbots, messages, inquiries] = await Promise.all([
+      pool.query(
+        `SELECT
+           COUNT(*)::int AS total_chatbots,
+           COUNT(*) FILTER (WHERE trial_ends_at > now())::int AS active_trials,
+           COUNT(*) FILTER (WHERE trial_ends_at <= now())::int AS ended_trials
+         FROM public.chatbot_contexts`,
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS messages_today
+         FROM public.chatbot_chat_messages
+         WHERE created_at >= date_trunc('day', now())`,
+      ),
+      pool.query(`SELECT COUNT(*)::int AS total_trial_inquiries FROM public.trial_inquiries`),
+    ])
+    res.json({
+      ok: true,
+      ...chatbots.rows[0],
+      ...(messages.rows[0] || { messages_today: 0 }),
+      ...(inquiries.rows[0] || { total_trial_inquiries: 0 }),
+    })
+  } catch (e) {
+    console.error('[admin/metrics]', e)
+    res.status(500).json({ ok: false, error: 'Could not load admin metrics' })
+  }
+})
+
+app.get('/api/admin/chatbots', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for admin chatbots' })
+    const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 200)
+    const r = await pool.query(
+      `SELECT
+         chatbot_id,
+         created_at,
+         trial_ends_at,
+         coalesce(record_json->>'websiteUrl', '') AS website_url,
+         coalesce(record_json->'owner'->>'name', '') AS owner_name,
+         coalesce(record_json->'owner'->>'email', '') AS owner_email,
+         coalesce(record_json->'owner'->>'phone', '') AS owner_phone
+       FROM public.chatbot_contexts
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit],
+    )
+    res.json({ ok: true, chatbots: r.rows })
+  } catch (e) {
+    console.error('[admin/chatbots]', e)
+    res.status(500).json({ ok: false, error: 'Could not load chatbots' })
+  }
+})
+
+app.get('/api/admin/trials', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for admin trials' })
+    const status = String(req.query.status || 'active')
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500)
+    const where = status === 'ended' ? 'cc.trial_ends_at <= now()' : 'cc.trial_ends_at > now()'
+    const r = await pool.query(
+      `SELECT
+         ti.id,
+         ti.name,
+         ti.email,
+         ti.phone,
+         ti.message,
+         ti.chatbot_id,
+         ti.created_at,
+         cc.trial_ends_at,
+         coalesce(cc.record_json->>'websiteUrl', '') AS website_url
+       FROM public.trial_inquiries ti
+       LEFT JOIN public.chatbot_contexts cc ON cc.chatbot_id = ti.chatbot_id
+       WHERE ${where}
+       ORDER BY ti.created_at DESC
+       LIMIT $1`,
+      [limit],
+    )
+    res.json({ ok: true, trials: r.rows })
+  } catch (e) {
+    console.error('[admin/trials]', e)
+    res.status(500).json({ ok: false, error: 'Could not load trial leads' })
+  }
+})
+
+app.get('/api/admin/conversations', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for conversations' })
+    const chatbotId = String(req.query.chatbotId || '').trim()
+    if (chatbotId && !CHATBOT_ID_RE.test(chatbotId)) return res.status(400).json({ ok: false, error: 'Invalid chatbotId' })
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500)
+    const r = chatbotId
+      ? await pool.query(
+          `SELECT
+             chatbot_id,
+             thread_id,
+             min(created_at) AS first_message_at,
+             max(created_at) AS last_message_at,
+             count(*)::int AS message_count
+           FROM public.chatbot_chat_messages
+           WHERE chatbot_id = $1
+           GROUP BY chatbot_id, thread_id
+           ORDER BY max(created_at) DESC
+           LIMIT $2`,
+          [chatbotId, limit],
+        )
+      : await pool.query(
+          `SELECT
+             chatbot_id,
+             thread_id,
+             min(created_at) AS first_message_at,
+             max(created_at) AS last_message_at,
+             count(*)::int AS message_count
+           FROM public.chatbot_chat_messages
+           GROUP BY chatbot_id, thread_id
+           ORDER BY max(created_at) DESC
+           LIMIT $1`,
+          [limit],
+        )
+    res.json({ ok: true, threads: r.rows })
+  } catch (e) {
+    console.error('[admin/conversations]', e)
+    res.status(500).json({ ok: false, error: 'Could not load conversations' })
+  }
+})
+
+app.get('/api/admin/messages', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for messages' })
+    const chatbotId = String(req.query.chatbotId || '').trim()
+    const threadId = String(req.query.threadId || '').trim()
+    if (!threadId) return res.status(400).json({ ok: false, error: 'threadId is required' })
+    if (chatbotId && !CHATBOT_ID_RE.test(chatbotId)) return res.status(400).json({ ok: false, error: 'Invalid chatbotId' })
+    const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 1000)
+    const r = chatbotId
+      ? await pool.query(
+          `SELECT id, chatbot_id, role, content, created_at
+           FROM public.chatbot_chat_messages
+           WHERE chatbot_id = $1 AND thread_id::text = $2
+           ORDER BY created_at ASC, id ASC
+           LIMIT $3`,
+          [chatbotId, threadId, limit],
+        )
+      : await pool.query(
+          `SELECT id, chatbot_id, role, content, created_at
+           FROM public.chatbot_chat_messages
+           WHERE thread_id::text = $1
+           ORDER BY created_at ASC, id ASC
+           LIMIT $2`,
+          [threadId, limit],
+        )
+    res.json({ ok: true, messages: r.rows })
+  } catch (e) {
+    console.error('[admin/messages]', e)
+    res.status(500).json({ ok: false, error: 'Could not load messages' })
+  }
+})
+
+app.get('/api/admin/analytics', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for analytics' })
+    const days = Math.min(Math.max(Number(req.query.days) || 14, 3), 90)
+    const r = await pool.query(
+      `WITH d AS (
+         SELECT generate_series((current_date - ($1::int - 1)), current_date, interval '1 day')::date AS day
+       ),
+       c AS (
+         SELECT date(created_at) AS day, count(*)::int AS chatbots
+         FROM public.chatbot_contexts
+         WHERE created_at >= (current_date - ($1::int - 1))
+         GROUP BY date(created_at)
+       ),
+       m AS (
+         SELECT date(created_at) AS day, count(*)::int AS messages
+         FROM public.chatbot_chat_messages
+         WHERE created_at >= (current_date - ($1::int - 1))
+         GROUP BY date(created_at)
+       ),
+       t AS (
+         SELECT date(created_at) AS day, count(*)::int AS trial_leads
+         FROM public.trial_inquiries
+         WHERE created_at >= (current_date - ($1::int - 1))
+         GROUP BY date(created_at)
+       )
+       SELECT
+         d.day::text AS day,
+         coalesce(c.chatbots, 0) AS chatbots,
+         coalesce(m.messages, 0) AS messages,
+         coalesce(t.trial_leads, 0) AS trial_leads
+       FROM d
+       LEFT JOIN c ON c.day = d.day
+       LEFT JOIN m ON m.day = d.day
+       LEFT JOIN t ON t.day = d.day
+       ORDER BY d.day ASC`,
+      [days],
+    )
+    res.json({ ok: true, series: r.rows })
+  } catch (e) {
+    console.error('[admin/analytics]', e)
+    res.status(500).json({ ok: false, error: 'Could not load analytics' })
+  }
+})
+
+app.get('/api/admin/settings', async (_req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for admin settings' })
+    const settings = await getAdminSettings(pool)
+    res.json({ ok: true, settings })
+  } catch (e) {
+    console.error('[admin/settings:get]', e)
+    res.status(500).json({ ok: false, error: 'Could not load settings' })
+  }
+})
+
+app.put('/api/admin/settings', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for admin settings' })
+    const current = await getAdminSettings(pool)
+    const next = {
+      ...current,
+      ...(req.body && typeof req.body === 'object' ? req.body : {}),
+    }
+    await ensureAdminSettingsSchema(pool)
+    await pool.query(
+      `INSERT INTO public.admin_settings (id, settings_json, updated_at)
+       VALUES ('global', $1::jsonb, now())
+       ON CONFLICT (id) DO UPDATE SET settings_json = EXCLUDED.settings_json, updated_at = now()`,
+      [JSON.stringify(next)],
+    )
+    res.json({ ok: true, settings: next })
+  } catch (e) {
+    console.error('[admin/settings:put]', e)
+    res.status(500).json({ ok: false, error: 'Could not save settings' })
+  }
+})
+
+app.delete('/api/admin/chatbot/:chatbotId', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for delete' })
+    const id = String(req.params.chatbotId || '').trim()
+    if (!CHATBOT_ID_RE.test(id)) return res.status(400).json({ ok: false, error: 'Invalid chatbotId' })
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query('DELETE FROM public.chatbot_chat_messages WHERE chatbot_id = $1', [id])
+      await client.query('DELETE FROM public.trial_inquiries WHERE chatbot_id = $1', [id])
+      await client.query('DELETE FROM public.chatbot_contexts WHERE chatbot_id = $1', [id])
+      await client.query('COMMIT')
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw e
+    } finally {
+      client.release()
+    }
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('[admin/delete-chatbot]', e)
+    res.status(500).json({ ok: false, error: 'Could not remove chatbot' })
+  }
+})
+
+app.listen(PORT, async () => {
   console.log('[cors] open — all origins allowed (origin: true)')
-  console.log('[data]', getDataRoot(), '— secured contexts & inquiries')
+  if (isDatabaseEnabled()) {
+    const dbc = await dbHealthCheck()
+    if (dbc.ok) {
+      console.log('[db] Connected — PostgreSQL OK (chatbot_contexts use the database)')
+    } else {
+      console.warn(
+        '[db] Not connected — DATABASE_URL is set but `SELECT 1` failed:',
+        dbc.error || dbc.reason || 'check URI, password, and sslmode (try sslmode=no-verify with Node pg)',
+      )
+      const hint = describeDatabaseUrlForLog()
+      if (hint.configured && !hint.parseError) {
+        console.warn('[db] From DATABASE_URL (password hidden):', {
+          host: hint.host,
+          port: hint.port,
+          user: hint.user,
+          database: hint.database,
+          sessionPoolerUserOk: hint.userLooksLikeSessionPooler,
+        })
+      }
+      if (String(dbc.error || '').includes('Tenant or user not found')) {
+        console.warn(
+          '[db] "Tenant or user not found" → copy Session pooler URI from Supabase → Connect exactly (pooler host is often aws-0-… or aws-1-… per project). Reset database password if unsure; use ?sslmode=no-verify with Node pg.',
+        )
+      }
+    }
+  } else {
+    console.log('[db] Skipped — no DATABASE_URL; chatbot contexts use the filesystem')
+    console.log('[data]', getDataRoot(), '— secured contexts & inquiries')
+  }
   console.log(`Scrape API listening on http://127.0.0.1:${PORT}`)
   console.log('POST /api/scrape with JSON { website, name, email, phone }')
   console.log('GET /api/chatbot-context/new-id — allocate 8-digit context ID')
   console.log('POST /api/chatbot-context/save — password-encrypt & store scraped bundle')
-  console.log('POST /api/chatbot-test/open (password only) | /api/chatbot-test/message — personal chat (3-day trial)')
+  console.log(
+    'POST /api/chatbot-test/open | /message | /history | /clear — personal chat (3-day trial, persistent history)',
+  )
   console.log('POST /api/trial-inquiry — contact form after trial')
   console.log('POST /api/contact-demo — Request a demo (Nodemailer → owner + submitter)')
   if (isContactMailConfigured()) {

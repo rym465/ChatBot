@@ -137,7 +137,7 @@ export function buildChatSystemPrompt(inner, platformContact = null, toneId = 'p
     `If something is not covered, say you are not sure and suggest how the customer can reach the business (use contact details from the knowledge when present). Do not invent prices, guarantees, or service areas.`,
   )
   parts.push(
-    `When visitors ask who owns the business, how to contact the owner, or for the proprietor’s details, use the **Website owner / registered business contact** section below (if present). Share name, email, and/or phone as listed—still in the **"${TONE_LABEL[tone]}"** voice, not a different persona.`,
+    `When visitors ask about ownership or direct contact, use ONLY the contact details present in the scraped website knowledge (phones/emails/other links). Do not invent owner personal details if they are not in the scrape.`,
   )
 
   if (tone === 'concise') {
@@ -170,22 +170,6 @@ export function buildChatSystemPrompt(inner, platformContact = null, toneId = 'p
 
   if (inner.confidentialPrompts && String(inner.confidentialPrompts).trim()) {
     parts.push(`\n--- Private operator instructions (follow these carefully) ---\n${String(inner.confidentialPrompts).trim()}`)
-  }
-
-  const ow = inner.owner && typeof inner.owner === 'object' ? inner.owner : {}
-  const ownerName = String(ow.name || '').trim()
-  const ownerEmail = String(ow.email || '').trim()
-  const ownerPhone = String(ow.phone || '').trim()
-  if (ownerName || ownerEmail || ownerPhone) {
-    parts.push(
-      `\n--- Website owner / registered business contact (verified at chatbot setup — not taken from the public website text) ---`,
-    )
-    parts.push(
-      `The business owner provided these details when creating this chatbot. If a visitor asks who runs the business, how to reach the owner, or for direct contact, share the information below politely (e.g. “Here is the contact we have on file for the owner…”). Use only what is listed; do not invent extra channels.`,
-    )
-    if (ownerName) parts.push(`**Owner name:** ${ownerName}`)
-    if (ownerEmail) parts.push(`**Owner email:** ${ownerEmail}`)
-    if (ownerPhone) parts.push(`**Owner phone:** ${ownerPhone}`)
   }
 
   if (inner.structuredContext && typeof inner.structuredContext === 'object') {
