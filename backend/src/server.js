@@ -58,13 +58,13 @@ const app = express()
 app.use(
   cors({
     origin: true,
-    methods: ['GET', 'POST', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   }),
 )
 app.use(express.json({ limit: '15mb' }))
 
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000
-const adminSessions = new Map()
+const ADMIN_TOKEN_SECRET = String(process.env.ADMIN_LOGIN_TOKEN_SECRET || 'change-this-admin-token-secret').trim()
 
 function adminCredentialConfig() {
   return {
@@ -73,21 +73,53 @@ function adminCredentialConfig() {
   }
 }
 
-function pruneExpiredAdminSessions() {
-  const now = Date.now()
-  for (const [token, session] of adminSessions.entries()) {
-    if (!session || Number(session.expiresAt || 0) <= now) adminSessions.delete(token)
+function encodeBase64Url(value) {
+  return Buffer.from(value, 'utf8').toString('base64url')
+}
+
+function decodeBase64UrlToString(value) {
+  try {
+    return Buffer.from(String(value || ''), 'base64url').toString('utf8')
+  } catch {
+    return ''
   }
 }
 
-function createAdminSession(email) {
-  pruneExpiredAdminSessions()
-  const token = crypto.randomBytes(32).toString('hex')
-  adminSessions.set(token, {
+function signAdminTokenPart(payloadB64) {
+  return crypto.createHmac('sha256', ADMIN_TOKEN_SECRET).update(String(payloadB64 || '')).digest('base64url')
+}
+
+function createAdminToken(email) {
+  const payload = {
     email,
-    expiresAt: Date.now() + ADMIN_SESSION_TTL_MS,
-  })
-  return token
+    exp: Date.now() + ADMIN_SESSION_TTL_MS,
+  }
+  const payloadB64 = encodeBase64Url(JSON.stringify(payload))
+  const sig = signAdminTokenPart(payloadB64)
+  return `${payloadB64}.${sig}`
+}
+
+function verifyAdminToken(token) {
+  const parts = String(token || '').split('.')
+  if (parts.length !== 2) return null
+  const [payloadB64, sig] = parts
+  const expected = signAdminTokenPart(payloadB64)
+  const a = Buffer.from(String(sig || ''), 'utf8')
+  const b = Buffer.from(String(expected || ''), 'utf8')
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null
+
+  const raw = decodeBase64UrlToString(payloadB64)
+  if (!raw) return null
+  let payload = null
+  try {
+    payload = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  const email = String(payload?.email || '').trim().toLowerCase()
+  const exp = Number(payload?.exp || 0)
+  if (!email || !Number.isFinite(exp) || exp <= Date.now()) return null
+  return { email, expiresAt: exp }
 }
 
 function requireAdminAuth(req, res, next) {
@@ -97,8 +129,7 @@ function requireAdminAuth(req, res, next) {
   const m = /^Bearer\s+(.+)$/i.exec(raw)
   const token = m ? String(m[1] || '').trim() : ''
   if (!token) return res.status(401).json({ ok: false, error: 'Admin login required' })
-  pruneExpiredAdminSessions()
-  const session = adminSessions.get(token)
+  const session = verifyAdminToken(token)
   if (!session) return res.status(401).json({ ok: false, error: 'Session expired. Please login again.' })
   req.adminSession = session
   return next()
@@ -669,7 +700,7 @@ app.post('/api/admin/login', async (req, res) => {
     if (inputEmail !== cfg.email || inputPassword !== cfg.password) {
       return res.status(401).json({ ok: false, error: 'Invalid email or password' })
     }
-    const token = createAdminSession(inputEmail)
+    const token = createAdminToken(inputEmail)
     return res.json({
       ok: true,
       token,
