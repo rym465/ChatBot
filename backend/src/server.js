@@ -33,6 +33,7 @@ import {
 import { runChatCompletion } from './chatWithOpenAI.js'
 import { saveTrialInquiry } from './trialInquiryStore.js'
 import { ensureTrialInquiryTable } from './trialInquiryDb.js'
+import { ensureHistorySchema } from './chatbotChatHistoryDb.js'
 import { isContactMailConfigured, sendContactDemoEmails } from './sendContactDemoEmails.js'
 import { getDataRoot } from './dataPaths.js'
 
@@ -1353,6 +1354,9 @@ app.get('/api/admin/metrics', async (_req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for admin metrics' })
+    // Same guards as /api/admin/leads — parallel admin fetches must not race schema creation.
+    await ensureTrialInquiryTable(pool)
+    await ensureHistorySchema(pool)
     const [chatbots, messages, inquiries] = await Promise.all([
       pool.query(
         `SELECT
@@ -1588,6 +1592,8 @@ app.get('/api/admin/analytics', async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for analytics' })
+    await ensureTrialInquiryTable(pool)
+    await ensureHistorySchema(pool)
     const days = Math.min(Math.max(Number(req.query.days) || 14, 3), 90)
     const r = await pool.query(
       `WITH d AS (

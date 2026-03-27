@@ -2,7 +2,9 @@
  * Admin API origin — same rules as `frontend/src/api.js`.
  *
  * - Local dev: leave `API_BASE_URL` empty so requests use `/api/*` and Vite proxies to `vite.config.js` target.
- * - Production: set `VITE_API_BASE` at build time to your real backend (e.g. https://api.example.com).
+ * - Production on Vercel: leave `API_BASE_URL` empty so `/api/*` is handled by `admin-panel/api/proxy.js`;
+ *   set `BACKEND_URL` (or `VITE_API_BASE`) on the admin Vercel project to your Node API origin (no trailing slash).
+ * - Or bake the backend into the static bundle: set `VITE_API_BASE` at build time.
  * - Dev but hit remote: set `VITE_FORCE_ENV_API=true` and `VITE_API_BASE=https://...`.
  */
 export const API_BASE_URL = ''

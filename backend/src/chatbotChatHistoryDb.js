@@ -3,7 +3,8 @@ import { getPool } from './dbPool.js'
 let schemaReady = false
 let schemaInitPromise = null
 
-async function ensureHistorySchema(pool) {
+/** Ensures `chatbot_chat_messages` exists (idempotent). Safe to call before admin aggregate queries. */
+export async function ensureHistorySchema(pool) {
   if (schemaReady) return
   if (!schemaInitPromise) {
     schemaInitPromise = (async () => {

@@ -193,6 +193,7 @@ export default function App() {
 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [analyticsError, setAnalyticsError] = useState('')
   /** While non-null, that chatbot row is fetching bootstrap + integration (can take 1–2 min on first SDK enable). */
   const [integrationBusyId, setIntegrationBusyId] = useState('')
 
@@ -339,14 +340,15 @@ export default function App() {
   }
 
   async function loadAnalytics() {
+    setAnalyticsError('')
     try {
       const res = await authedFetch(ADMIN_API.analytics(14))
       const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load analytics')
+      if (!res.ok || !data.ok) throw new Error(data?.error || `Failed to load analytics (${res.status})`)
       setAnalytics(Array.isArray(data.series) ? data.series : [])
-    } catch {
+    } catch (e) {
       setAnalytics([])
-      setError('Could not load analytics')
+      setAnalyticsError(e instanceof Error ? e.message : 'Could not load analytics')
     }
   }
 
@@ -924,6 +926,11 @@ export default function App() {
             </Panel>
 
             <Panel title="Analytics (14 days)">
+              {analyticsError ? (
+                <div className="alert" role="alert">
+                  {analyticsError}
+                </div>
+              ) : null}
               <div className="analytics-topline">
                 <div className="analytics-chip">
                   <span className="analytics-chip__k">Today vs avg</span>
