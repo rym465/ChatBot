@@ -12,6 +12,8 @@ const DEFAULT_MAX_TOTAL_CHARS = Math.min(
 )
 const DEFAULT_MAX_PAGES = Math.min(Math.max(Number(process.env.SCRAPE_MAX_PAGES) || 50, 1), 200)
 const DEFAULT_MAX_DEPTH = Math.min(Math.max(Number(process.env.SCRAPE_MAX_DEPTH) || 5, 0), 12)
+const SITEMAP_FETCH_LIMIT = Math.min(Math.max(Number(process.env.SCRAPE_SITEMAP_FETCH_LIMIT) || 20, 1), 100)
+const SITEMAP_URL_LIMIT = Math.min(Math.max(Number(process.env.SCRAPE_SITEMAP_URL_LIMIT) || 3000, 100), 20_000)
 
 const SKIP_FILE_RE =
   /\.(pdf|jpe?g|png|gif|webp|svg|ico|zip|rar|7z|mp4|mp3|wav|css|js|mjs|map|json|xml|txt|woff2?|ttf|eot)(\?|$)/i
@@ -160,6 +162,91 @@ async function fetchHtml(url) {
   return res.text()
 }
 
+async function fetchTextAny(url) {
+  const res = await fetch(url, {
+    redirect: 'follow',
+    headers: {
+      Accept: 'application/xml,text/xml,text/plain,text/html;q=0.9,*/*;q=0.8',
+      'User-Agent': USER_AGENT,
+    },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  })
+  if (!res.ok) return null
+  return String(await res.text().catch(() => ''))
+}
+
+function extractLocUrlsFromXml(xmlText) {
+  const out = []
+  const re = /<loc>\s*([^<\s][^<]*)\s*<\/loc>/gi
+  let m
+  while ((m = re.exec(xmlText))) {
+    const u = String(m[1] || '').trim()
+    if (u) out.push(u)
+  }
+  return out
+}
+
+async function discoverSitemapPageUrls(seed, origin, maxPages) {
+  const sitemapHints = [
+    '/sitemap.xml',
+    '/sitemap_index.xml',
+    '/sitemap-index.xml',
+    '/wp-sitemap.xml',
+  ]
+  const pending = sitemapHints.map((p) => new URL(p, origin).href)
+  const seenSitemaps = new Set()
+  const discoveredPages = []
+  let fetched = 0
+
+  while (pending.length && fetched < SITEMAP_FETCH_LIMIT && discoveredPages.length < SITEMAP_URL_LIMIT) {
+    const sm = String(pending.shift() || '')
+    if (!sm || seenSitemaps.has(sm)) continue
+    seenSitemaps.add(sm)
+
+    let text = ''
+    try {
+      text = String((await fetchTextAny(sm)) || '')
+    } catch {
+      text = ''
+    }
+    fetched += 1
+    if (!text || !/<(urlset|sitemapindex)\b/i.test(text)) continue
+
+    const locs = extractLocUrlsFromXml(text)
+    for (const raw of locs) {
+      if (!sameOrigin(raw, origin)) continue
+      const c = canonicalPageUrl(raw)
+      if (!c) continue
+      if (/\.xml(\?|$)/i.test(c) && pending.length < SITEMAP_URL_LIMIT) {
+        if (!seenSitemaps.has(c)) pending.push(c)
+        continue
+      }
+      let u
+      try {
+        u = new URL(c)
+      } catch {
+        continue
+      }
+      if (shouldSkipUrl(u)) continue
+      discoveredPages.push(c)
+      if (discoveredPages.length >= Math.max(maxPages * 10, 200)) break
+    }
+  }
+
+  // Keep stable order and unique
+  const uniq = []
+  const seen = new Set()
+  for (const u of discoveredPages) {
+    if (seen.has(u)) continue
+    seen.add(u)
+    uniq.push(u)
+    if (uniq.length >= Math.max(maxPages * 10, 200)) break
+  }
+  // Ensure seed is first candidate if not present.
+  if (!seen.has(seed)) uniq.unshift(seed)
+  return uniq
+}
+
 /**
  * Same-origin BFS without a browser (works on hosts without Chrome).
  * @param {string} seedUrlString
@@ -177,6 +264,20 @@ export async function crawlWebsiteHttp(seedUrlString, opts = {}) {
   const queue = [{ url: seed, depth: 0 }]
   const visited = new Set()
   const queued = new Set([seed])
+
+  // Discover deep/internal pages from sitemap.xml (and sitemap index files) before BFS.
+  // This improves coverage on sites where important pages are not linked in visible nav.
+  try {
+    const sitemapUrls = await discoverSitemapPageUrls(seed, origin, maxPages)
+    for (const u of sitemapUrls) {
+      if (queued.has(u) || visited.has(u)) continue
+      queued.add(u)
+      queue.push({ url: u, depth: 1 })
+      if (queue.length >= Math.max(maxPages * 12, 300)) break
+    }
+  } catch (e) {
+    console.warn('[crawl-http] sitemap discovery skipped:', e instanceof Error ? e.message : e)
+  }
 
   const parts = []
   const urlsVisited = []
