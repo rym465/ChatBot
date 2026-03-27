@@ -1517,6 +1517,7 @@ app.get('/api/admin/conversations', async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for conversations' })
+    await ensureHistorySchema(pool)
     const chatbotId = String(req.query.chatbotId || '').trim()
     if (chatbotId && !CHATBOT_ID_RE.test(chatbotId)) return res.status(400).json({ ok: false, error: 'Invalid chatbotId' })
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500)
@@ -1559,6 +1560,7 @@ app.get('/api/admin/messages', async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for messages' })
+    await ensureHistorySchema(pool)
     const chatbotId = String(req.query.chatbotId || '').trim()
     const threadId = String(req.query.threadId || '').trim()
     if (!threadId) return res.status(400).json({ ok: false, error: 'threadId is required' })

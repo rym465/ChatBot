@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ADMIN_API } from './api.js'
+import { ADMIN_API, api } from './api.js'
 
 function formatIso(iso) {
   try {
@@ -71,7 +71,7 @@ function Sidebar({ active, onChange }) {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <img className="brand__badge-img" src="/api/logo/admin.svg" alt="Admin logo" />
+        <img className="brand__badge-img" src={api('logo/admin.svg')} alt="Admin logo" />
         <div>
           <p className="brand__eyebrow">White Label AI</p>
           <h1 className="brand__title">Admin Panel</h1>
@@ -292,6 +292,104 @@ export default function App() {
 
   const authedFetch = useCallback(async (url, init = {}) => fetch(url, init), [])
 
+  /** Core fetches (throw on failure). Used by refresh orchestration to avoid parallel loaders clobbering `error` / `loading`. */
+  async function pullMetrics() {
+    const res = await authedFetch(ADMIN_API.metrics)
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load metrics')
+    setMetrics(data)
+  }
+
+  /** @returns {string} chatbot id used for follow-up conversation query */
+  async function pullChatbots(preserveChatbotId = '') {
+    const res = await authedFetch(ADMIN_API.chatbots(25))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load chatbots')
+    const next = Array.isArray(data.chatbots) ? data.chatbots : []
+    setChatbots(next)
+    const kept = String(preserveChatbotId || '').trim()
+    const resolved = kept || String(next[0]?.chatbot_id || '').trim()
+    setChatbotId(resolved)
+    return resolved
+  }
+
+  async function pullAnalytics() {
+    const res = await authedFetch(ADMIN_API.analytics(14))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data.ok) throw new Error(data?.error || `Failed to load analytics (${res.status})`)
+    setAnalytics(Array.isArray(data.series) ? data.series : [])
+  }
+
+  async function pullSettings() {
+    const res = await authedFetch(ADMIN_API.settings)
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load settings')
+    if (data.settings && typeof data.settings === 'object') setSettings(data.settings)
+  }
+
+  async function pullLeads(source = '') {
+    const res = await authedFetch(ADMIN_API.leads({ source, limit: 250 }))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load leads')
+    setLeads(Array.isArray(data.leads) ? data.leads : [])
+  }
+
+  async function pullConversations(chatbotIdForQuery = '') {
+    const cid = String(chatbotIdForQuery || '').trim()
+    const res = await authedFetch(ADMIN_API.conversations({ chatbotId: cid, limit: 100 }))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load conversations')
+    const nextThreads = Array.isArray(data.threads) ? data.threads : []
+    setThreads(nextThreads)
+    setMessages([])
+    setThreadId('')
+  }
+
+  /** Single coordinated load: one loading flag, merged errors, conversations after chatbots resolve bot id. */
+  async function refreshAllData() {
+    setLoading(true)
+    setError('')
+    setAnalyticsError('')
+    const errParts = []
+    const settled = await Promise.allSettled([
+      pullMetrics(),
+      pullChatbots(chatbotId),
+      pullAnalytics(),
+      pullSettings(),
+      pullLeads(leadSource),
+    ])
+    const labels = ['Metrics', 'Chatbots', 'Analytics', 'Settings', 'Leads']
+    settled.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason)
+        if (i === 2) {
+          setAnalytics([])
+          setAnalyticsError(msg)
+        } else {
+          errParts.push(`${labels[i]}: ${msg}`)
+        }
+        if (i === 0) setMetrics(null)
+        if (i === 1) {
+          setChatbots([])
+          setChatbotId('')
+        }
+        if (i === 4) setLeads([])
+      }
+    })
+    const convId = settled[1].status === 'fulfilled' ? settled[1].value : String(chatbotId || '').trim()
+    try {
+      await pullConversations(convId)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      errParts.push(`Conversations: ${msg}`)
+      setThreads([])
+      setMessages([])
+      setThreadId('')
+    }
+    setError(errParts.length ? errParts.join(' · ') : '')
+    setLoading(false)
+  }
+
   async function copyLeadText(label, value) {
     const text = String(value || '').trim()
     if (!text) return
@@ -309,10 +407,7 @@ export default function App() {
     setError('')
     setLoading(true)
     try {
-      const res = await authedFetch(ADMIN_API.metrics)
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load metrics')
-      setMetrics(data)
+      await pullMetrics()
     } catch (e) {
       setMetrics(null)
       setError(e instanceof Error ? e.message : String(e))
@@ -325,12 +420,7 @@ export default function App() {
     setError('')
     setLoading(true)
     try {
-      const res = await authedFetch(ADMIN_API.chatbots(25))
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load chatbots')
-      const next = Array.isArray(data.chatbots) ? data.chatbots : []
-      setChatbots(next)
-      setChatbotId((prev) => (prev && prev.trim() ? prev : next[0]?.chatbot_id || ''))
+      await pullChatbots(chatbotId)
     } catch (e) {
       setChatbots([])
       setError(e instanceof Error ? e.message : String(e))
@@ -339,27 +429,12 @@ export default function App() {
     }
   }
 
-  async function loadAnalytics() {
-    setAnalyticsError('')
-    try {
-      const res = await authedFetch(ADMIN_API.analytics(14))
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.ok) throw new Error(data?.error || `Failed to load analytics (${res.status})`)
-      setAnalytics(Array.isArray(data.series) ? data.series : [])
-    } catch (e) {
-      setAnalytics([])
-      setAnalyticsError(e instanceof Error ? e.message : 'Could not load analytics')
-    }
-  }
-
   async function loadSettings() {
+    setError('')
     try {
-      const res = await authedFetch(ADMIN_API.settings)
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load settings')
-      if (data.settings && typeof data.settings === 'object') setSettings(data.settings)
-    } catch {
-      // keep defaults
+      await pullSettings()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -367,10 +442,7 @@ export default function App() {
     setError('')
     setLoading(true)
     try {
-      const res = await authedFetch(ADMIN_API.leads({ source, limit: 250 }))
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load leads')
-      setLeads(Array.isArray(data.leads) ? data.leads : [])
+      await pullLeads(source)
     } catch (e) {
       setLeads([])
       setError(e instanceof Error ? e.message : String(e))
@@ -675,14 +747,7 @@ export default function App() {
     setError('')
     setLoading(true)
     try {
-      const res = await authedFetch(ADMIN_API.conversations({ chatbotId, limit: 100 }))
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load conversations')
-      const nextThreads = Array.isArray(data.threads) ? data.threads : []
-      setThreads(nextThreads)
-      setMessages([])
-      // Do not auto-open chat; user must click a thread/bot row first.
-      setThreadId('')
+      await pullConversations(chatbotId)
     } catch (e) {
       setThreads([])
       setMessages([])
@@ -772,12 +837,8 @@ export default function App() {
 
   useEffect(() => {
     if (!canLoad) return
-    loadMetrics()
-    loadChatbots()
-    loadAnalytics()
-    loadSettings()
-    loadConversations()
-    loadLeads()
+    void refreshAllData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap once; Refresh uses latest handlers
   }, [canLoad])
 
   return (
@@ -809,19 +870,7 @@ export default function App() {
             </h2>
           </div>
           <div className="topbar__actions">
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={() => {
-                loadMetrics()
-                loadChatbots()
-                loadAnalytics()
-                loadSettings()
-                loadConversations()
-                loadLeads()
-              }}
-              disabled={loading}
-            >
+            <button type="button" className="btn-primary" onClick={() => void refreshAllData()} disabled={loading}>
               Refresh
             </button>
           </div>

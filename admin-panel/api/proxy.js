@@ -1,7 +1,10 @@
 /**
- * Vercel serverless: proxies /api/* → your Node backend (BACKEND_URL in Vercel env).
+ * Vercel serverless: proxies /api/* → your Node backend.
+ * Prefer setting BACKEND_URL in Vercel; falls back to the same default origin as `admin-panel/src/api.js`.
  * vercel.json: /api/:path* → /api/proxy?fwd=:path*
  */
+
+const DEFAULT_BACKEND_ORIGIN = 'https://white-label-ai-chatbot-generator-ty.vercel.app'
 
 export const config = {
   maxDuration: 300,
@@ -32,13 +35,13 @@ function forwardHeaders(req) {
 }
 
 export default async function handler(req, res) {
-  const raw = process.env.BACKEND_URL || process.env.VITE_API_BASE || ''
+  const raw =
+    process.env.BACKEND_URL || process.env.VITE_API_BASE || process.env.VITE_PUBLIC_API_ORIGIN || DEFAULT_BACKEND_ORIGIN
   const backend = String(raw).trim().replace(/\/$/, '')
   if (!backend) {
     return res.status(503).json({
       ok: false,
-      error:
-        'Vercel proxy: set BACKEND_URL (or VITE_API_BASE) to your Node API origin, e.g. https://your-app.onrender.com',
+      error: 'Vercel proxy: configure BACKEND_URL to your Node API origin.',
     })
   }
 

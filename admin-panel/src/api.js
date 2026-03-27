@@ -1,21 +1,29 @@
 /**
- * Admin API origin — same rules as `frontend/src/api.js`.
+ * Admin API origin — same idea as `frontend/src/api.js`, with a production default so Vercel works without extra env.
  *
- * - Local dev: leave `API_BASE_URL` empty so requests use `/api/*` and Vite proxies to `vite.config.js` target.
- * - Production on Vercel: leave `API_BASE_URL` empty so `/api/*` is handled by `admin-panel/api/proxy.js`;
- *   set `BACKEND_URL` (or `VITE_API_BASE`) on the admin Vercel project to your Node API origin (no trailing slash).
- * - Or bake the backend into the static bundle: set `VITE_API_BASE` at build time.
- * - Dev but hit remote: set `VITE_FORCE_ENV_API=true` and `VITE_API_BASE=https://...`.
+ * - Local dev: leave `API_BASE_URL` empty → `/api/*` via Vite proxy → `vite.config.js`.
+ * - Production build: if unset, uses `DEFAULT_PUBLIC_API_ORIGIN` (Express on your main deploy) so admin data loads.
+ * - Overrides: `API_BASE_URL` here, or `VITE_API_BASE` / `VITE_PUBLIC_API_ORIGIN` (no trailing slash).
+ * - Dev + remote API: `VITE_FORCE_ENV_API=true` and `VITE_API_BASE=https://...`.
  */
 export const API_BASE_URL = ''
 
+/** Change this if your Node API is hosted on another hostname. */
+export const DEFAULT_PUBLIC_API_ORIGIN = 'https://white-label-ai-chatbot-generator-ty.vercel.app'
+
 const fromFile = String(API_BASE_URL || '').trim().replace(/\/$/, '')
 const fromEnv = String(import.meta.env.VITE_API_BASE || '').trim().replace(/\/$/, '')
+const fromPublic = String(import.meta.env.VITE_PUBLIC_API_ORIGIN || '').trim().replace(/\/$/, '')
 const forceEnvInDev = String(import.meta.env.VITE_FORCE_ENV_API || '').toLowerCase() === 'true'
 const fromEnvAllowed = !import.meta.env.DEV || forceEnvInDev ? fromEnv : ''
 
-/** Empty → same-origin `/api/*` (Vite dev proxy to backend). */
-export const API_ROOT = fromFile || fromEnvAllowed || ''
+const productionFallback =
+  import.meta.env.PROD && !fromFile && !fromEnvAllowed
+    ? (fromPublic || DEFAULT_PUBLIC_API_ORIGIN).trim().replace(/\/$/, '')
+    : ''
+
+/** Dev: empty → same-origin `/api/*` (Vite proxy). Prod: defaults to deployed API origin. */
+export const API_ROOT = fromFile || fromEnvAllowed || productionFallback
 
 export function api(path) {
   const p = path.startsWith('/') ? path.slice(1) : path
