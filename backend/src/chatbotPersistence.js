@@ -38,6 +38,16 @@ export async function deleteChatbotRecord(chatbotId) {
   return fsStore.deleteRecord(chatbotId)
 }
 
+/**
+ * Merge/replace fields on an existing stored record (e.g. add widget integration metadata).
+ * @param {string} chatbotId
+ * @param {object} record
+ */
+export async function updateChatbotRecord(chatbotId, record) {
+  if (isDatabaseEnabled()) return db.updateRecordJsonDb(chatbotId, record)
+  return fsStore.updateRecord(chatbotId, record)
+}
+
 /** @returns {Promise<string | null>} */
 export async function resolveChatbotIdByPasswordAsync(password) {
   if (isDatabaseEnabled()) {

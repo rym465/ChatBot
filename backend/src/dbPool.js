@@ -52,8 +52,12 @@ export function getPool() {
     pool = new Pool({
       connectionString: getDatabaseUrl(),
       max: 10,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 15_000,
+      // Shorter idle eviction so we do not hand out TCP sockets the host DB already closed
+      // (common after long Puppeteer work between queries, e.g. integration-bootstrap re-crawl).
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 25_000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000,
     })
     pool.on('error', (err) => {
       console.error('[db] unexpected pool error', err)

@@ -58,3 +58,19 @@ export function deleteRecord(id) {
   const p = path.join(getChatbotsDir(), `${String(id)}.json`)
   if (fs.existsSync(p)) fs.unlinkSync(p)
 }
+
+/**
+ * @param {string} id
+ * @param {object} record
+ */
+export function updateRecord(id, record) {
+  if (!/^\d{8}$/.test(String(id || ''))) throw new Error('Invalid chatbot id')
+  ensureDataDir()
+  const p = path.join(getChatbotsDir(), `${String(id)}.json`)
+  if (!fs.existsSync(p)) {
+    const err = new Error('CHATBOT_NOT_FOUND')
+    /** @type {any} */ (err).code = 'CHATBOT_NOT_FOUND'
+    throw err
+  }
+  fs.writeFileSync(p, JSON.stringify(record, null, 2), 'utf8')
+}

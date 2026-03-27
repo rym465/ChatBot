@@ -2,15 +2,20 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import crypto from 'crypto'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import { crawlWebsite } from './scrapeWithSelenium.js'
 import { crawlWebsiteHttp } from './scrapeWithFetch.js'
 import { structureWebsiteForChatbot } from './structureWithOpenAI.js'
 import { encryptWithPassword, decryptWithPassword } from './encryptContextBundle.js'
+import { encryptWithServerSecret, decryptWithServerSecret } from './encryptServerSecret.js'
 import {
   allocateNewChatbotId,
   persistChatbotRecord,
   readChatbotRecord,
   deleteChatbotRecord,
+  updateChatbotRecord,
   resolveChatbotIdByPasswordAsync,
   isDatabaseEnabled,
 } from './chatbotPersistence.js'
@@ -19,6 +24,7 @@ import { dbHealthCheck, describeDatabaseUrlForLog, getPool } from './dbPool.js'
 import { createTestSession, getTestSession, pushExchange, startNewChatThread } from './chatbotTestSession.js'
 import { appendChatExchange, listChatMessages } from './chatbotChatHistory.js'
 import {
+  CHAT_TONE_IDS,
   deriveChatTheme,
   buildChatSystemPrompt,
   normalizeChatToneId,
@@ -32,6 +38,38 @@ import { getDataRoot } from './dataPaths.js'
 const PORT = Number(process.env.PORT) || 3000
 /** 3-day trial from first save (or from legacy record createdAt) */
 const TRIAL_MS = 3 * 24 * 60 * 60 * 1000
+
+/**
+ * URLs embedded in the client integration pack (widget.js, /api/...).
+ * Without this, `Host` is often 127.0.0.1 during local admin use — bad for SaaS handoff.
+ *
+ * Set on Vercel (or any host): PUBLIC_API_ORIGIN=https://your-app.vercel.app
+ * Optional alias: API_PUBLIC_ORIGIN. Trailing slash stripped.
+ * If unset, VERCEL_URL is used as https://… (Vercel sets it automatically).
+ */
+function resolvePublicApiOrigin(req) {
+  const raw = String(process.env.PUBLIC_API_ORIGIN || process.env.API_PUBLIC_ORIGIN || '').trim()
+  if (raw) {
+    const withProto = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+    try {
+      const u = new URL(withProto.replace(/\/$/, ''))
+      return `${u.protocol}//${u.host}`
+    } catch {
+      /* fall through */
+    }
+  }
+  const vercel = String(process.env.VERCEL_URL || '').trim().replace(/\/$/, '')
+  if (vercel) {
+    const host = vercel.replace(/^https?:\/\//i, '')
+    return `https://${host}`
+  }
+  const proto =
+    String(req.headers['x-forwarded-proto'] || '')
+      .split(',')[0]
+      .trim() || (req.secure ? 'https' : 'http')
+  const host = String(req.headers.host || '').trim()
+  return host ? `${proto}://${host}` : ''
+}
 
 function trialEndsAtFromRecord(record) {
   if (record.trialEndsAt && typeof record.trialEndsAt === 'string') {
@@ -83,6 +121,27 @@ function decodeBase64UrlToString(value) {
   } catch {
     return ''
   }
+}
+
+function integrationSecretPepper() {
+  // Server-only pepper so client can't guess token hash/validation data.
+  const p = String(process.env.INTEGRATION_SECRET_PEPPER || ADMIN_TOKEN_SECRET || '').trim()
+  return p || 'dev-insecure-integration-secret-pepper'
+}
+
+function hashIntegrationSecret(secret) {
+  const s = typeof secret === 'string' ? secret : ''
+  return crypto.createHmac('sha256', integrationSecretPepper()).update(String(s), 'utf8').digest('hex')
+}
+
+function timingSafeEqualHex(a, b) {
+  const sa = String(a || '')
+  const sb = String(b || '')
+  if (!sa || !sb || sa.length !== sb.length) return false
+  const ab = Buffer.from(sa, 'hex')
+  const bb = Buffer.from(sb, 'hex')
+  if (ab.length !== bb.length) return false
+  return crypto.timingSafeEqual(ab, bb)
 }
 
 function signAdminTokenPart(payloadB64) {
@@ -180,6 +239,61 @@ function canonicalWebsiteUrl(input) {
   } catch {
     return null
   }
+}
+
+/**
+ * Admin-only: rebuild the same JSON shape as /api/chatbot-context/save uses, by re-crawling `record.websiteUrl`.
+ * Lets you issue SDK secrets without the customer’s “Test chatbot” password (context is re-fetched from the live site).
+ * @param {object} record
+ * @returns {Promise<string>} JSON string (inner payload)
+ */
+async function rebuildInnerJsonFromStoredWebsite(record) {
+  const rawUrl = typeof record.websiteUrl === 'string' ? record.websiteUrl.trim() : ''
+  const target = normalizeTargetUrl(rawUrl)
+  if (!target) {
+    const err = new Error('NO_WEBSITE_URL')
+    /** @type {any} */ (err).code = 'NO_WEBSITE_URL'
+    throw err
+  }
+  const ownerContact = {
+    name: typeof record.owner?.name === 'string' ? record.owner.name.trim() : '',
+    email: typeof record.owner?.email === 'string' ? record.owner.email.trim() : '',
+    phone: typeof record.owner?.phone === 'string' ? record.owner.phone.trim() : '',
+  }
+  const crawlOpts = { maxPages: 25, maxDepth: 4 }
+  const result = await crawlWebsiteWithFallback(target, crawlOpts)
+
+  let structuredContext = null
+  if (process.env.OPENAI_API_KEY?.trim()) {
+    try {
+      const out = await structureWebsiteForChatbot({
+        url: target,
+        title: result.title,
+        scrapedText: result.text,
+        owner: ownerContact,
+      })
+      structuredContext = out.structured
+    } catch (e) {
+      console.warn('[admin/rebuild-inner] structure skipped:', e)
+    }
+  }
+
+  const inner = {
+    v: 1,
+    savedAt: new Date().toISOString(),
+    websiteUrl: target,
+    pageTitle: typeof result.title === 'string' ? result.title : '',
+    scrapedText: typeof result.text === 'string' ? result.text : '',
+    structuredContext,
+    confidentialPrompts: '',
+    owner: {
+      name: ownerContact.name,
+      email: ownerContact.email,
+      phone: ownerContact.phone,
+    },
+    crawl: result.crawl && typeof result.crawl === 'object' ? result.crawl : null,
+  }
+  return JSON.stringify(inner)
 }
 
 async function ensureAdminSettingsSchema(pool) {
@@ -290,6 +404,15 @@ app.post('/api/chatbot-context/save', async (req, res) => {
 
     const plain = JSON.stringify(inner)
     const encrypted = encryptWithPassword(pw, plain)
+    /** Server-sealed copy: allows widget/SDK to load context with integrationSecret only (no end-user password). */
+    const serverSealed = encryptWithServerSecret(plain)
+
+    // Per-chatbot integration secret for auto-unlock via widget.
+    // Stored encrypted so the visitor never types the chatbot password.
+    const integrationSecret = crypto.randomBytes(32).toString('base64url')
+    const integrationSecretHash = hashIntegrationSecret(integrationSecret)
+    const integrationSecretEnc = encryptWithServerSecret(integrationSecret)
+    const passwordEnc = encryptWithServerSecret(pw)
 
     const trialEndsAt = new Date(Date.now() + TRIAL_MS).toISOString()
 
@@ -305,6 +428,15 @@ app.post('/api/chatbot-context/save', async (req, res) => {
         phone: inner.owner?.phone || '',
       },
       encrypted,
+      serverSealed,
+      // Needed for:
+      // 1) auto-unlock widget (integrationSecret -> decrypt password -> decrypt context)
+      // 2) admin later copying the integration snippet (secretEnc -> reveal integrationSecret)
+      integration: {
+        secretHash: integrationSecretHash,
+        secretEnc: integrationSecretEnc,
+        passwordEnc,
+      },
       note: 'Decrypt only with your password using the same algorithm (AES-256-GCM + scrypt).',
     }
 
@@ -322,13 +454,16 @@ app.post('/api/chatbot-context/save', async (req, res) => {
       throw regErr
     }
 
+    const securedExportForClient = { ...record }
+    delete securedExportForClient.serverSealed
+
     res.json({
       ok: true,
       chatbotId: id,
       createdAt: record.createdAt,
       trialEndsAt: record.trialEndsAt,
-      /** Portable encrypted backup for download (same as stored server-side) */
-      securedExport: record,
+      /** Portable encrypted backup for download (server-sealed field omitted — for SDK use your embed/API only). */
+      securedExport: securedExportForClient,
     })
   } catch (e) {
     if (e && typeof e === 'object' && 'code' in e && e.code === 'CHATBOT_ID_TAKEN') {
@@ -409,6 +544,101 @@ app.post('/api/chatbot-test/open', async (req, res) => {
   } catch (e) {
     console.error('[chatbot-test/open]', e)
     res.status(500).json({ ok: false, error: 'Could not open chat session' })
+  }
+})
+
+// Widget auto-unlock:
+// - Visitor NEVER types the chatbot password.
+// - Widget sends { chatbotId, integrationSecret } (client SDK key).
+// - Prefer serverSealed + integrationSecret; legacy rows use passwordEnc + customer password ciphertext.
+app.post('/api/widget/open', async (req, res) => {
+  try {
+    const { chatbotId, integrationSecret } = req.body || {}
+    const id = typeof chatbotId === 'string' ? chatbotId.trim() : ''
+    const sec = typeof integrationSecret === 'string' ? integrationSecret : ''
+
+    if (!CHATBOT_ID_RE.test(id)) return res.status(400).json({ ok: false, error: 'Invalid chatbotId' })
+    if (sec.length < 16) return res.status(400).json({ ok: false, error: 'Missing integrationSecret' })
+
+    const record = await readChatbotRecord(id)
+    if (!record || !record.encrypted) {
+      return res.status(404).json({ ok: false, error: 'Chatbot context not found' })
+    }
+
+    const integration = record.integration && typeof record.integration === 'object' ? record.integration : null
+    const hasServerSealed =
+      record.serverSealed && typeof record.serverSealed === 'object' && Boolean(record.serverSealed.ciphertext)
+    const hasLegacyPasswordEnc =
+      integration?.passwordEnc &&
+      typeof integration.passwordEnc === 'object' &&
+      Boolean(integration.passwordEnc.ciphertext)
+
+    if (!integration?.secretHash || !integration?.secretEnc) {
+      return res.status(403).json({
+        ok: false,
+        error: 'This chatbot does not have widget integration configured. Ask admin to re-save the context.',
+      })
+    }
+    if (!hasServerSealed && !hasLegacyPasswordEnc) {
+      return res.status(403).json({
+        ok: false,
+        error: 'This chatbot is missing server embed data. Open admin → Copy once (or re-save from the landing page).',
+      })
+    }
+
+    const expectedHash = hashIntegrationSecret(sec)
+    if (!timingSafeEqualHex(expectedHash, integration.secretHash)) {
+      return res.status(401).json({ ok: false, error: 'Invalid integrationSecret' })
+    }
+
+    let inner
+    if (hasServerSealed) {
+      try {
+        const plain = decryptWithServerSecret(record.serverSealed)
+        inner = JSON.parse(plain)
+      } catch {
+        return res.status(500).json({ ok: false, error: 'Could not load context for this integration' })
+      }
+    } else {
+      const pw = decryptWithServerSecret(/** @type {any} */ (integration).passwordEnc)
+      if (typeof pw !== 'string' || pw.length < 8) {
+        return res.status(500).json({ ok: false, error: 'Integration secret invalid on server' })
+      }
+      try {
+        const plain = decryptWithPassword(pw, record.encrypted)
+        inner = JSON.parse(plain)
+      } catch {
+        return res.status(401).json({ ok: false, error: 'Could not decrypt context for this integration' })
+      }
+    }
+
+    const theme = deriveChatTheme(inner)
+    const trialEndsAt = trialEndsAtFromRecord(record)
+    const trialExpired = Date.now() >= Date.parse(trialEndsAt)
+    const { sessionId, threadId } = createTestSession(inner, trialEndsAt, id)
+
+    let chatHistory = []
+    try {
+      chatHistory = await listChatMessages(id)
+    } catch (e) {
+      console.warn('[widget/open] load chat history', e)
+    }
+
+    res.json({
+      ok: true,
+      sessionId,
+      threadId,
+      chatHistory,
+      theme,
+      chatbotId: id,
+      trialEndsAt,
+      serverTime: new Date().toISOString(),
+      trialExpired,
+      companyContact: companyContactMeta(),
+    })
+  } catch (e) {
+    console.error('[widget/open]', e)
+    res.status(500).json({ ok: false, error: 'Could not open widget chat session' })
   }
 })
 
@@ -958,6 +1188,173 @@ app.put('/api/admin/settings', async (req, res) => {
   }
 })
 
+// Admin: attach / rotate widget integration (SDK secret). Never requires the customer password:
+// - If serverSealed exists: rotate integration only.
+// - Else: re-crawl `record.websiteUrl` and build serverSealed (admin trusts public URL on file).
+// Optional body.password still works for rare manual decrypt migrations.
+app.post('/api/admin/chatbot/:chatbotId/integration-bootstrap', async (req, res) => {
+  req.setTimeout(300000)
+  res.setTimeout(300000)
+  try {
+    const id = String(req.params.chatbotId || '').trim()
+    if (!CHATBOT_ID_RE.test(id)) return res.status(400).json({ ok: false, error: 'Invalid chatbotId' })
+    const { password } = req.body || {}
+    const pw = typeof password === 'string' ? password : ''
+
+    const record = await readChatbotRecord(id)
+    if (!record?.encrypted) return res.status(404).json({ ok: false, error: 'Chatbot not found' })
+
+    const hasServerSealed =
+      record.serverSealed && typeof record.serverSealed === 'object' && Boolean(record.serverSealed.ciphertext)
+
+    let plainForSeal = /** @type {string | null} */ (null)
+
+    if (pw.length >= 8) {
+      try {
+        plainForSeal = decryptWithPassword(pw, record.encrypted)
+        const inner = JSON.parse(plainForSeal)
+        if (!inner || typeof inner !== 'object') throw new Error('Invalid decrypted payload')
+      } catch {
+        return res.status(401).json({ ok: false, error: 'Invalid password for this chatbot' })
+      }
+    } else if (hasServerSealed) {
+      try {
+        plainForSeal = decryptWithServerSecret(record.serverSealed)
+        const inner = JSON.parse(plainForSeal)
+        if (!inner || typeof inner !== 'object') throw new Error('Invalid sealed payload')
+      } catch {
+        return res.status(500).json({
+          ok: false,
+          error: 'Server-sealed context is unreadable. Use Copy again after fixing the record or re-save from the landing page.',
+        })
+      }
+    } else {
+      try {
+        plainForSeal = await rebuildInnerJsonFromStoredWebsite(record)
+        JSON.parse(plainForSeal)
+      } catch (e) {
+        const code = e && typeof e === 'object' && 'code' in e ? /** @type {any} */ (e).code : ''
+        if (code === 'NO_WEBSITE_URL') {
+          return res.status(400).json({
+            ok: false,
+            error: 'This chatbot has no website URL on file; cannot auto-build SDK context.',
+          })
+        }
+        const msg = e instanceof Error ? e.message : String(e)
+        console.error('[admin/chatbot:integration-bootstrap] re-crawl', e)
+        return res.status(502).json({
+          ok: false,
+          error: `Could not re-read the website to build SDK context: ${msg}`,
+        })
+      }
+    }
+
+    const integrationSecret = crypto.randomBytes(32).toString('base64url')
+    const integrationSecretHash = hashIntegrationSecret(integrationSecret)
+    const integrationSecretEnc = encryptWithServerSecret(integrationSecret)
+
+    const next = {
+      ...record,
+      ...(plainForSeal && !hasServerSealed ? { serverSealed: encryptWithServerSecret(plainForSeal) } : {}),
+      integration: {
+        secretHash: integrationSecretHash,
+        secretEnc: integrationSecretEnc,
+        ...(pw.length >= 8 ? { passwordEnc: encryptWithServerSecret(pw) } : {}),
+      },
+    }
+
+    await updateChatbotRecord(id, next)
+    res.json({ ok: true })
+  } catch (e) {
+    const code = e && typeof e === 'object' && 'code' in e ? /** @type {any} */ (e).code : ''
+    const msg = e instanceof Error ? e.message : String(e)
+    if (msg === 'CHATBOT_NOT_FOUND' || code === 'CHATBOT_NOT_FOUND') {
+      return res.status(404).json({ ok: false, error: 'Chatbot not found' })
+    }
+    console.error('[admin/chatbot:integration-bootstrap]', e)
+    res.status(500).json({ ok: false, error: 'Could not enable widget integration' })
+  }
+})
+
+// Admin: fetch integration snippet for a specific chatbot.
+// Returns an embed code that auto-unlocks the bot via POST /api/widget/open.
+app.get('/api/admin/chatbot/:chatbotId/integration', async (req, res) => {
+  try {
+    const id = String(req.params.chatbotId || '').trim()
+    if (!CHATBOT_ID_RE.test(id)) return res.status(400).json({ ok: false, error: 'Invalid chatbotId' })
+
+    const record = await readChatbotRecord(id)
+    if (!record) return res.status(404).json({ ok: false, error: 'Chatbot not found' })
+
+    const integration = record.integration && typeof record.integration === 'object' ? record.integration : null
+    if (!integration?.secretEnc) {
+      return res.status(403).json({
+        ok: false,
+        error:
+          'Widget integration not configured. Use Download or Copy in admin (enables SDK keys automatically; first time may re-read the website, 1–2 min).',
+      })
+    }
+
+    const integrationSecret = decryptWithServerSecret(integration.secretEnc)
+
+    const origin = resolvePublicApiOrigin(req)
+
+    const widgetScriptUrl = origin ? `${origin}/widget.js` : '/widget.js'
+    const apiBase = origin ? `${origin}/api` : '/api'
+    const embedCode = `<script src="${widgetScriptUrl}" data-wl-chatbot-id="${id}" data-wl-integration-secret="${integrationSecret}" defer></script>`
+
+    const openBody = { chatbotId: id, integrationSecret }
+    const messageExample = {
+      sessionId: '<paste sessionId from open response>',
+      message: 'What services do you offer?',
+      tone: 'professional',
+    }
+    const historyExample = { sessionId: '<paste sessionId from open response>' }
+    const clearExample = { sessionId: '<paste sessionId from open response>' }
+
+    res.json({
+      ok: true,
+      chatbotId: id,
+      integrationSecret,
+      apiBase,
+      widgetScriptUrl,
+      embedCode,
+      endpoints: {
+        widgetOpen: `${apiBase}/widget/open`,
+        chatMessage: `${apiBase}/chatbot-test/message`,
+        chatHistory: `${apiBase}/chatbot-test/history`,
+        chatClear: `${apiBase}/chatbot-test/clear`,
+      },
+      payload: {
+        open: openBody,
+        message: messageExample,
+        history: historyExample,
+        clear: clearExample,
+      },
+      responseShape: {
+        open:
+          '{ ok, sessionId, threadId, chatHistory?, theme?, chatbotId, trialEndsAt, serverTime, trialExpired, companyContact? }',
+        message: '{ ok, reply, model?, threadId, saved? }',
+        history: '{ ok, messages, threadId }',
+        clear: '{ ok, threadId }',
+      },
+      toneIds: [...CHAT_TONE_IDS],
+      notes: [
+        'Knowledge is tied to this chatbotId: answers use only the scraped website context stored for that bot.',
+        'Give your client chatbotId + integrationSecret only (SDK). They do not use the end-user “Test chatbot” password on their site.',
+        'integrationSecret is like an API key: anyone with it can chat as this bot. Use admin Copy again to rotate.',
+        'First Copy on an old row may re-crawl the stored website URL server-side (can take 1–2 minutes); keep the tab open.',
+        'Flow: POST widget/open → use sessionId from JSON → POST chatbot-test/message for each user message.',
+        'Sessions are server memory (~2h idle). Call widget/open again if you get session expired.',
+        'Production: backend should set PUBLIC_API_ORIGIN=https://your-deployment.vercel.app (Vercel also sets VERCEL_URL) so this pack never lists 127.0.0.1 when you run admin locally.',
+     ],
+    })
+  } catch (e) {
+    console.error('[admin/chatbot:integration]', e)
+    res.status(500).json({ ok: false, error: 'Could not build integration snippet' })
+  }
+})
+
 app.delete('/api/admin/chatbot/:chatbotId', async (req, res) => {
   try {
     const pool = getPool()
@@ -981,6 +1378,20 @@ app.delete('/api/admin/chatbot/:chatbotId', async (req, res) => {
   } catch (e) {
     console.error('[admin/delete-chatbot]', e)
     res.status(500).json({ ok: false, error: 'Could not remove chatbot' })
+  }
+})
+
+// Public widget script (auto-unlock UI).
+app.get('/widget.js', async (_req, res) => {
+  try {
+    const dir = path.dirname(fileURLToPath(import.meta.url))
+    const widgetFile = path.join(dir, 'widget.js')
+    res.setHeader('Cache-Control', 'public, max-age=3600')
+    res.type('application/javascript')
+    res.sendFile(widgetFile)
+  } catch (e) {
+    console.error('[widget.js]', e)
+    res.status(500).type('text/plain').send('// widget.js failed to load')
   }
 })
 
@@ -1016,6 +1427,19 @@ app.listen(PORT, async () => {
     console.log('[data]', getDataRoot(), '— secured contexts & inquiries')
   }
   console.log(`Scrape API listening on http://127.0.0.1:${PORT}`)
+  {
+    const explicit = String(process.env.PUBLIC_API_ORIGIN || process.env.API_PUBLIC_ORIGIN || '').trim()
+    const vercel = String(process.env.VERCEL_URL || '').trim().replace(/^https?:\/\//i, '').replace(/\/$/, '')
+    if (explicit) {
+      console.log('[integration] Client SDK packs use PUBLIC_API_ORIGIN →', explicit.replace(/\/$/, ''))
+    } else if (vercel) {
+      console.log('[integration] Client SDK packs use https://' + vercel + ' (VERCEL_URL)')
+    } else {
+      console.log(
+        '[integration] Set PUBLIC_API_ORIGIN=https://your-app.vercel.app so client packs use your live API, not 127.0.0.1',
+      )
+    }
+  }
   console.log('POST /api/scrape with JSON { website, name, email, phone }')
   console.log('GET /api/chatbot-context/new-id — allocate 8-digit context ID')
   console.log('POST /api/chatbot-context/save — password-encrypt & store scraped bundle')
