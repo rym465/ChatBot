@@ -37,7 +37,7 @@ import { getDataRoot } from './dataPaths.js'
 
 const PORT = Number(process.env.PORT) || 3000
 /** 5-minute trial from first save (or from legacy record createdAt) */
-const TRIAL_MS = 5 * 60 * 1000
+const TRIAL_MS = 2 * 60 * 1000
 
 function supportContactMeta() {
   const email = String(process.env.COMPANY_CONTACT_EMAIL || process.env.CONTACT_GMAIL_USER || '').trim()
