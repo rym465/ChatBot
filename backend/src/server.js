@@ -678,13 +678,46 @@ app.post('/api/trial-inquiry', async (req, res) => {
     if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
       return res.status(400).json({ ok: false, error: 'Valid email is required' })
     }
+    const safeName = typeof name === 'string' ? name.trim() : ''
+    const safePhone = typeof phone === 'string' ? phone.trim() : ''
+    const safeMsg = typeof message === 'string' ? message.trim() : ''
+    const safeChatbotId = typeof chatbotId === 'string' ? chatbotId.trim() : ''
+
     await saveTrialInquiry({
-      name: typeof name === 'string' ? name.trim() : '',
+      name: safeName,
       email: em,
-      phone: typeof phone === 'string' ? phone.trim() : '',
-      message: typeof message === 'string' ? message.trim() : '',
-      chatbotId: typeof chatbotId === 'string' ? chatbotId.trim() : '',
+      phone: safePhone,
+      message: safeMsg,
+      chatbotId: safeChatbotId,
     })
+
+    // Same mailer flow as Request-a-demo: notify admin inbox + confirmation to visitor.
+    // Keep this best-effort so lead capture still succeeds even if mail provider is temporarily down.
+    if (isContactMailConfigured()) {
+      try {
+        let businessName = ''
+        let websiteUrl = ''
+        if (CHATBOT_ID_RE.test(safeChatbotId)) {
+          const record = await readChatbotRecord(safeChatbotId)
+          businessName =
+            (typeof record?.structuredContext?.inferredBusinessName === 'string' &&
+              record.structuredContext.inferredBusinessName.trim()) ||
+            (typeof record?.pageTitle === 'string' && record.pageTitle.trim()) ||
+            ''
+          websiteUrl = typeof record?.websiteUrl === 'string' ? record.websiteUrl.trim() : ''
+        }
+        await sendContactDemoEmails({
+          businessName: businessName || `Trial lead (${safeChatbotId || 'unknown bot'})`,
+          yourName: safeName,
+          email: em,
+          phone: safePhone,
+          websiteUrl,
+          notes: safeMsg || `Lead captured from trial-expired chatbot form. Chatbot ID: ${safeChatbotId || 'n/a'}`,
+        })
+      } catch (mailErr) {
+        console.error('[trial-inquiry] mail', mailErr)
+      }
+    }
     res.json({ ok: true })
   } catch (e) {
     console.error('[trial-inquiry]', e)
