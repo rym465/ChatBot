@@ -63,6 +63,7 @@ function Sidebar({ active, onChange }) {
   const items = [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'chatbots', label: 'Chatbots' },
+    { id: 'leads', label: 'Leads' },
     { id: 'conversations', label: 'Conversations' },
     { id: 'settings', label: 'Settings' },
   ]
@@ -149,6 +150,8 @@ export default function App() {
   const [threads, setThreads] = useState([])
   const [messages, setMessages] = useState([])
   const [analytics, setAnalytics] = useState([])
+  const [leads, setLeads] = useState([])
+  const [leadSource, setLeadSource] = useState('')
   const [settings, setSettings] = useState({
     theme: { red: '#dc2626', black: '#000000', white: '#ffffff' },
     pricing: { starter: 299, growth: 499, pro: 799, currency: 'USD' },
@@ -342,6 +345,22 @@ export default function App() {
       if (data.settings && typeof data.settings === 'object') setSettings(data.settings)
     } catch {
       // keep defaults
+    }
+  }
+
+  async function loadLeads({ source = leadSource } = {}) {
+    setError('')
+    setLoading(true)
+    try {
+      const res = await authedFetch(ADMIN_API.leads({ source, limit: 250 }))
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load leads')
+      setLeads(Array.isArray(data.leads) ? data.leads : [])
+    } catch (e) {
+      setLeads([])
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -641,6 +660,7 @@ export default function App() {
     loadAnalytics()
     loadSettings()
     loadConversations()
+    loadLeads()
   }, [canLoad, authToken])
 
   if (!authToken) {
@@ -704,6 +724,8 @@ export default function App() {
                 ? 'Dashboard'
                 : active === 'chatbots'
                   ? 'Chatbots'
+                  : active === 'leads'
+                    ? 'Leads'
                   : active === 'conversations'
                     ? 'Conversations'
                     : 'Settings'}
@@ -719,6 +741,7 @@ export default function App() {
                 loadAnalytics()
                 loadSettings()
                 loadConversations()
+                loadLeads()
               }}
               disabled={loading}
             >
@@ -941,6 +964,139 @@ export default function App() {
                     <tr>
                       <td colSpan="10" className="table-empty">
                         No data loaded yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </Table>
+            </Panel>
+          </section>
+        ) : null}
+
+        {active === 'leads' ? (
+          <section className="panels panels--single">
+            <Panel
+              title="Leads"
+              right={
+                <div className="search-row">
+                  <select
+                    className="input"
+                    value={leadSource}
+                    onChange={(e) => setLeadSource(e.target.value)}
+                    aria-label="Lead source"
+                  >
+                    <option value="">All sources</option>
+                    <option value="contact-demo">Request a demo</option>
+                    <option value="trial-expired">Trial expired</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => loadLeads({ source: leadSource })}
+                    disabled={loading}
+                  >
+                    Load
+                  </button>
+                </div>
+              }
+            >
+              <div className="record-strip">
+                <div className="record-strip__item">
+                  <span className="record-strip__k">Leads loaded</span>
+                  <span className="record-strip__v">{fmtNumber(leads.length)}</span>
+                </div>
+                <div className="record-strip__item">
+                  <span className="record-strip__k">Request a demo</span>
+                  <span className="record-strip__v">
+                    {fmtNumber(leads.filter((l) => String(l.source || '') === 'contact-demo').length)}
+                  </span>
+                </div>
+                <div className="record-strip__item">
+                  <span className="record-strip__k">Trial expired</span>
+                  <span className="record-strip__v">
+                    {fmtNumber(leads.filter((l) => String(l.source || '') === 'trial-expired').length)}
+                  </span>
+                </div>
+                <div className="record-strip__item">
+                  <span className="record-strip__k">Last lead</span>
+                  <span className="record-strip__v">{leads[0]?.created_at ? formatRelativeFromIso(leads[0].created_at) : '—'}</span>
+                </div>
+              </div>
+
+              <Table>
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Source</th>
+                    <th>Business / Name</th>
+                    <th>Contact</th>
+                    <th>Website</th>
+                    <th>Chatbot</th>
+                    <th>Message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leads.length ? (
+                    leads.map((l) => {
+                      const src = String(l.source || '')
+                      const srcLabel = src === 'contact-demo' ? 'Request a demo' : src === 'trial-expired' ? 'Trial expired' : src || 'Lead'
+                      const website = String(l.website_url || l.chatbot_website_url || '').trim()
+                      const businessOrName = String(l.business_name || l.name || '').trim() || '—'
+                      const email = String(l.email || '').trim()
+                      const phone = String(l.phone || '').trim()
+                      const botId = String(l.chatbot_id || '').trim()
+                      const botTitle = String(l.chatbot_title || '').trim()
+
+                      return (
+                        <tr key={l.id}>
+                          <td className="cell-stack">
+                            <div className="cell-stack__primary">{formatIso(l.created_at)}</div>
+                            <div className="cell-stack__muted">{formatRelativeFromIso(l.created_at)}</div>
+                          </td>
+                          <td>
+                            <span className={`pill ${src === 'contact-demo' ? 'pill--active' : src === 'trial-expired' ? 'pill--ended' : ''}`}>
+                              {srcLabel}
+                            </span>
+                          </td>
+                          <td className="cell-stack">
+                            <div className="cell-stack__primary">{businessOrName}</div>
+                            {botTitle ? <div className="cell-stack__muted">{botTitle}</div> : <div className="cell-stack__muted">—</div>}
+                          </td>
+                          <td className="cell-stack">
+                            <div className="cell-stack__primary">
+                              {email ? (
+                                <a className="table-link" href={`mailto:${email}`}>
+                                  {email}
+                                </a>
+                              ) : (
+                                '—'
+                              )}
+                            </div>
+                            <div className="cell-stack__muted">{phone || '—'}</div>
+                          </td>
+                          <td className="td-truncate" title={website}>
+                            {website ? (
+                              <a className="table-link" href={website} target="_blank" rel="noreferrer">
+                                {website}
+                              </a>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                          <td className="cell-stack">
+                            <div className="cell-stack__primary">{botId || '—'}</div>
+                            <div className="cell-stack__muted">{l.trial_ends_at ? `Trial ends ${formatIso(l.trial_ends_at)}` : '—'}</div>
+                          </td>
+                          <td>
+                            <div className="lead-msg">{msgPreview(l.message || '', 140)}</div>
+                          </td>
+                        </tr>
+                      )
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan="7" className="table-empty">
+                        No leads found yet. (New “Request a demo” and “Trial expired” submissions will appear here.)
                       </td>
                     </tr>
                   )}

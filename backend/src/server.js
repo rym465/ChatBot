@@ -780,6 +780,22 @@ app.post('/api/contact-demo', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Please enter a valid email address.' })
     }
 
+    // Persist as a lead so it shows up in the admin Leads page.
+    try {
+      await saveTrialInquiry({
+        source: 'contact-demo',
+        businessName,
+        name: yourName,
+        email,
+        phone,
+        websiteUrl,
+        message: notes,
+        chatbotId: '',
+      })
+    } catch (e) {
+      console.warn('[contact-demo] lead persist failed (continuing):', e)
+    }
+
     await sendContactDemoEmails({ businessName, yourName, email, phone, websiteUrl, notes })
     res.json({ ok: true })
   } catch (e) {
@@ -802,6 +818,7 @@ app.post('/api/trial-inquiry', async (req, res) => {
     const safeChatbotId = typeof chatbotId === 'string' ? chatbotId.trim() : ''
 
     await saveTrialInquiry({
+      source: 'trial-expired',
       name: safeName,
       email: em,
       phone: safePhone,
@@ -1222,6 +1239,46 @@ app.get('/api/admin/trials', async (req, res) => {
   } catch (e) {
     console.error('[admin/trials]', e)
     res.status(500).json({ ok: false, error: 'Could not load trial leads' })
+  }
+})
+
+app.get('/api/admin/leads', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for admin leads' })
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 1000)
+    const source = String(req.query.source || '').trim()
+
+    const where = source ? `WHERE ti.source = $2` : ``
+    const params = source ? [limit, source] : [limit]
+
+    const r = await pool.query(
+      `SELECT
+         ti.id,
+         ti.created_at,
+         coalesce(ti.source, '') AS source,
+         coalesce(ti.business_name, '') AS business_name,
+         coalesce(ti.name, '') AS name,
+         ti.email,
+         coalesce(ti.phone, '') AS phone,
+         coalesce(ti.website_url, '') AS website_url,
+         coalesce(ti.message, '') AS message,
+         coalesce(ti.chatbot_id, '') AS chatbot_id,
+         coalesce(cc.record_json->>'pageTitle', '') AS chatbot_title,
+         coalesce(cc.record_json->>'websiteUrl', '') AS chatbot_website_url,
+         cc.trial_ends_at
+       FROM public.trial_inquiries ti
+       LEFT JOIN public.chatbot_contexts cc ON cc.chatbot_id = ti.chatbot_id
+       ${where}
+       ORDER BY ti.created_at DESC
+       LIMIT $1`,
+      params,
+    )
+
+    res.json({ ok: true, leads: r.rows })
+  } catch (e) {
+    console.error('[admin/leads]', e)
+    res.status(500).json({ ok: false, error: 'Could not load leads' })
   }
 })
 

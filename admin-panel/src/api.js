@@ -27,6 +27,12 @@ export const ADMIN_API = {
   chatbots: (limit = 25) => api(`admin/chatbots?limit=${encodeURIComponent(String(limit))}`),
   trials: (status = 'active', limit = 25) =>
     api(`admin/trials?status=${encodeURIComponent(String(status))}&limit=${encodeURIComponent(String(limit))}`),
+  leads: ({ source = '', limit = 100 } = {}) => {
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    if (String(source).trim()) params.set('source', String(source).trim())
+    return api(`admin/leads?${params.toString()}`)
+  },
   conversations: ({ chatbotId = '', limit = 50 } = {}) => {
     const params = new URLSearchParams()
     params.set('limit', String(limit))

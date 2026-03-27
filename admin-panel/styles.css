@@ -456,10 +456,28 @@ th {
   gap: 0.1rem;
 }
 
+.cell-stack__primary {
+  font-weight: 900;
+}
+
+.cell-stack__muted {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .cell-stack__sub {
   color: var(--text-muted);
   font-size: 0.78rem;
   font-weight: 700;
+}
+
+.lead-msg {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--black) 78%, transparent);
+  font-weight: 650;
 }
 
 .pill {
