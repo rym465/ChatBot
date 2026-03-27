@@ -60,6 +60,9 @@
     .wl-send { border:0; border-radius: 10px; background: var(--wl-accent, #dc2626); color:#fff; cursor:pointer; padding: 10px 12px; font-weight: 700; }
     .wl-disclaimer { font-size: 11px; opacity: .8; margin-top: 6px; }
     .wl-error { background: #fef2f2; color: #991b1b; padding: 10px; border-radius: 10px; border: 1px solid rgba(153,27,27,.25); font-size: 12px; margin-bottom: 8px; }
+    .wl-contact { background: #fff7ed; color: #7c2d12; padding: 10px; border-radius: 10px; border: 1px solid rgba(194,65,12,.25); font-size: 12px; margin-bottom: 8px; line-height: 1.45; }
+    .wl-contact b { display: inline-block; min-width: 56px; }
+    .wl-contact a { color: inherit; text-decoration: underline; }
     .wl-loading { opacity: .7; font-size: 12px; margin-top: 8px; }
   `
   document.head.appendChild(styles)
@@ -73,6 +76,7 @@
   let theme = null
   let trialEndsAtIso = ''
   let trialExpired = false
+  let supportContact = null
 
   function setVarsFromTheme(t) {
     if (!t || !t.colors) return
@@ -140,6 +144,7 @@
       trialExpired = false
       trialEndsAtIso = ''
       theme = null
+      supportContact = null
       render()
     })
 
@@ -156,6 +161,25 @@
       err.className = 'wl-error'
       err.textContent = errorState.message
       body.appendChild(err)
+    }
+
+    if (trialExpired && supportContact && typeof supportContact === 'object') {
+      const lines = []
+      if (supportContact.name) lines.push(`<div><b>Team:</b> ${String(supportContact.name)}</div>`)
+      if (supportContact.email) {
+        const em = String(supportContact.email)
+        lines.push(`<div><b>Email:</b> <a href="mailto:${em}">${em}</a></div>`)
+      }
+      if (supportContact.phone) lines.push(`<div><b>Phone:</b> ${String(supportContact.phone)}</div>`)
+      if (supportContact.address) lines.push(`<div><b>Address:</b> ${String(supportContact.address)}</div>`)
+      if (supportContact.hours) lines.push(`<div><b>Hours:</b> ${String(supportContact.hours)}</div>`)
+      if (lines.length) {
+        const card = document.createElement('div')
+        card.className = 'wl-contact'
+        card.innerHTML =
+          `<div style="font-weight:700; margin-bottom:4px;">Trial expired - contact admin to continue:</div>${lines.join('')}`
+        body.appendChild(card)
+      }
     }
 
     const currentThreadMessages = (allHistory || []).filter((m) => String(m.threadId || '') === String(threadId || ''))
@@ -259,6 +283,7 @@
     setVarsFromTheme(theme)
     trialEndsAtIso = data.trialEndsAt || ''
     trialExpired = !!data.trialExpired
+    supportContact = data.supportContact || null
     errorState.message = ''
     render()
   }

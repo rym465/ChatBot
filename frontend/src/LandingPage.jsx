@@ -1514,7 +1514,7 @@ function TestChatUnlockModal({ open, onClose, onSuccess }) {
               Test your chatbot
             </h2>
             <p className="chat-test-modal__sub">
-              Use the same password you chose when you saved your chatbot. You get a <strong>3-day trial</strong> from your
+              Use the same password you chose when you saved your chatbot. You get a <strong>5-minute trial</strong> from your
               first save. After you sign in, a chat icon appears at the bottom-right of this page — tap it to open your
               preview.
             </p>

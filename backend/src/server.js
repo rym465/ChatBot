@@ -36,8 +36,19 @@ import { isContactMailConfigured, sendContactDemoEmails } from './sendContactDem
 import { getDataRoot } from './dataPaths.js'
 
 const PORT = Number(process.env.PORT) || 3000
-/** 3-day trial from first save (or from legacy record createdAt) */
-const TRIAL_MS = 3 * 24 * 60 * 60 * 1000
+/** 5-minute trial from first save (or from legacy record createdAt) */
+const TRIAL_MS = 5 * 60 * 1000
+
+function supportContactMeta() {
+  const email = String(process.env.COMPANY_CONTACT_EMAIL || process.env.CONTACT_GMAIL_USER || '').trim()
+  return {
+    name: String(process.env.COMPANY_CONTACT_NAME || 'Admin Support').trim(),
+    email,
+    phone: String(process.env.COMPANY_CONTACT_PHONE || '').trim(),
+    address: String(process.env.COMPANY_CONTACT_ADDRESS || '').trim(),
+    hours: String(process.env.COMPANY_CONTACT_HOURS || '').trim(),
+  }
+}
 
 /**
  * URLs embedded in the client integration pack (widget.js, /api/...).
@@ -525,6 +536,7 @@ app.post('/api/chatbot-test/open', async (req, res) => {
       trialEndsAt,
       serverTime: new Date().toISOString(),
       trialExpired,
+      supportContact: supportContactMeta(),
     })
   } catch (e) {
     console.error('[chatbot-test/open]', e)
@@ -619,6 +631,7 @@ app.post('/api/widget/open', async (req, res) => {
       trialEndsAt,
       serverTime: new Date().toISOString(),
       trialExpired,
+      supportContact: supportContactMeta(),
     })
   } catch (e) {
     console.error('[widget/open]', e)
@@ -699,7 +712,7 @@ app.post('/api/chatbot-test/message', async (req, res) => {
       return res.status(403).json({
         ok: false,
         trialExpired: true,
-        error: 'Your 3-day trial has ended. Contact us to continue using your chatbot.',
+        error: 'Your 5-minute trial has ended. Contact us to continue using your chatbot.',
       })
     }
 
@@ -1317,7 +1330,7 @@ app.get('/api/admin/chatbot/:chatbotId/integration', async (req, res) => {
       },
       responseShape: {
         open:
-          '{ ok, sessionId, threadId, chatHistory?, theme?, chatbotId, trialEndsAt, serverTime, trialExpired }',
+          '{ ok, sessionId, threadId, chatHistory?, theme?, chatbotId, trialEndsAt, serverTime, trialExpired, supportContact? }',
         message: '{ ok, reply, model?, threadId, saved? }',
         history: '{ ok, messages, threadId }',
         clear: '{ ok, threadId }',
@@ -1428,7 +1441,7 @@ app.listen(PORT, async () => {
   console.log('GET /api/chatbot-context/new-id — allocate 8-digit context ID')
   console.log('POST /api/chatbot-context/save — password-encrypt & store scraped bundle')
   console.log(
-    'POST /api/chatbot-test/open | /message | /history | /clear — personal chat (3-day trial, persistent history)',
+    'POST /api/chatbot-test/open | /message | /history | /clear — personal chat (5-minute trial, persistent history)',
   )
   console.log('POST /api/trial-inquiry — contact form after trial')
   console.log('POST /api/contact-demo — Request a demo (Nodemailer → owner + submitter)')
