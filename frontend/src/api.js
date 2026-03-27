@@ -32,5 +32,5 @@ export const CHAT_TEST_BASE = api('chatbot-test')
 export const TRIAL_INQUIRY_API = api('trial-inquiry')
 export const CONTACT_DEMO_API = api('contact-demo')
 
-// Admin configuration used to synchronize theme colors and pricing.
-export const ADMIN_SETTINGS_API = api('admin/settings')
+// Public configuration used to synchronize theme colors and pricing.
+export const PUBLIC_SETTINGS_API = api('public-settings')

@@ -32,6 +32,7 @@ import {
 } from './chatbotTestPrompt.js'
 import { runChatCompletion } from './chatWithOpenAI.js'
 import { saveTrialInquiry } from './trialInquiryStore.js'
+import { ensureTrialInquiryTable } from './trialInquiryDb.js'
 import { isContactMailConfigured, sendContactDemoEmails } from './sendContactDemoEmails.js'
 import { getDataRoot } from './dataPaths.js'
 
@@ -330,13 +331,44 @@ async function getAdminSettings(pool) {
   await ensureAdminSettingsSchema(pool)
   const r = await pool.query(`SELECT settings_json FROM public.admin_settings WHERE id = 'global' LIMIT 1`)
   const defaults = {
-    theme: { red: '#dc2626', black: '#000000', white: '#ffffff' },
+    theme: { red: '#dc2626', green: '#15803d', black: '#000000', white: '#ffffff' },
     // Match the landing page defaults ($299 / $499 / $799)
     pricing: { starter: 299, growth: 499, pro: 799, currency: 'USD' },
   }
   const saved = r.rowCount ? r.rows[0].settings_json : {}
   return { ...defaults, ...(saved || {}) }
 }
+
+// Public (no auth): theme + pricing for the landing page / marketing site.
+app.get('/api/public-settings', async (_req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for settings' })
+    const settings = await getAdminSettings(pool)
+    const theme = settings?.theme && typeof settings.theme === 'object' ? settings.theme : {}
+    const pricing = settings?.pricing && typeof settings.pricing === 'object' ? settings.pricing : {}
+    return res.json({
+      ok: true,
+      settings: {
+        theme: {
+          red: String(theme.red || '#dc2626'),
+          green: String(theme.green || '#15803d'),
+          black: String(theme.black || '#000000'),
+          white: String(theme.white || '#ffffff'),
+        },
+        pricing: {
+          starter: Number.isFinite(pricing.starter) ? pricing.starter : 299,
+          growth: Number.isFinite(pricing.growth) ? pricing.growth : 499,
+          pro: Number.isFinite(pricing.pro) ? pricing.pro : 799,
+          currency: String(pricing.currency || 'USD'),
+        },
+      },
+    })
+  } catch (e) {
+    console.error('[public-settings]', e)
+    res.status(500).json({ ok: false, error: 'Could not load settings' })
+  }
+})
 
 app.get('/api/health', async (_req, res) => {
   const db = isDatabaseEnabled() ? await dbHealthCheck() : { ok: false, skipped: true }
@@ -1246,6 +1278,8 @@ app.get('/api/admin/leads', async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ ok: false, error: 'Database is required for admin leads' })
+    // Ensure schema upgrades exist before querying (older DBs won't have source/business_name/website_url yet).
+    await ensureTrialInquiryTable(pool)
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 1000)
     const source = String(req.query.source || '').trim()
 

@@ -1,6 +1,6 @@
 import { getPool, isDatabaseEnabled } from './dbPool.js'
 
-async function ensureTrialInquiryTable(pool) {
+export async function ensureTrialInquiryTable(pool) {
   // Table should be created by SQL, but we keep this guard to avoid “endpoint shows nothing”.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.trial_inquiries (

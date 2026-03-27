@@ -8,7 +8,7 @@ import {
   CHAT_TEST_BASE,
   TRIAL_INQUIRY_API,
   CONTACT_DEMO_API,
-  ADMIN_SETTINGS_API,
+  PUBLIC_SETTINGS_API,
 } from './api.js'
 
 function chatDayLabel(iso) {
@@ -2315,7 +2315,12 @@ export default function LandingPage() {
   const [testChatPanelOpen, setTestChatPanelOpen] = useState(false)
   const [contactSending, setContactSending] = useState(false)
   const [contactFeedback, setContactFeedback] = useState(null)
-  const [adminTheme, setAdminTheme] = useState({ red: '#dc2626', black: '#000000', white: '#ffffff' })
+  const [adminTheme, setAdminTheme] = useState({
+    red: '#dc2626',
+    green: '#15803d',
+    black: '#000000',
+    white: '#ffffff',
+  })
   const [adminPricing, setAdminPricing] = useState({ starter: 299, growth: 499, pro: 799 })
 
   const closeMenu = useCallback(() => setMenuOpen(false), [])
@@ -2365,7 +2370,7 @@ export default function LandingPage() {
     let alive = true
     async function load() {
       try {
-        const res = await fetch(ADMIN_SETTINGS_API)
+        const res = await fetch(PUBLIC_SETTINGS_API)
         const data = await res.json().catch(() => ({}))
         if (!alive) return
         if (!res.ok || !data.ok || !data.settings) return
@@ -2398,6 +2403,7 @@ export default function LandingPage() {
   const landingStyle = useMemo(
     () => ({
       '--red': adminTheme.red,
+      '--green': adminTheme.green || '#15803d',
       '--black': adminTheme.black,
       '--white': adminTheme.white,
     }),

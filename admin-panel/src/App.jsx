@@ -130,6 +130,44 @@ function Panel({ title, right, children }) {
   )
 }
 
+function normalizeHexColor(input, fallback) {
+  const raw = String(input || '').trim()
+  if (!raw) return fallback
+  const v = raw.startsWith('#') ? raw : `#${raw}`
+  return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : fallback
+}
+
+function ThemeColorField({ label, value, fallback, onChange }) {
+  const safe = normalizeHexColor(value, fallback)
+  return (
+    <div className="color-field">
+      <div className="color-field__label">{label}</div>
+      <div className="color-field__row">
+        <input
+          className="color-field__picker"
+          type="color"
+          value={safe}
+          onChange={(e) => onChange(e.target.value)}
+          aria-label={`${label} color picker`}
+        />
+        <input
+          className="input"
+          type="text"
+          value={String(value || '')}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={fallback}
+          inputMode="text"
+          aria-label={`${label} hex`}
+        />
+      </div>
+      <div className="color-field__meta">
+        <span className="color-field__swatch" style={{ background: safe }} aria-hidden="true" />
+        <span className="color-field__hex">{safe.toUpperCase()}</span>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const TOKEN_KEY = 'wlai_admin_token'
   const [active, setActive] = useState('dashboard')
@@ -152,8 +190,11 @@ export default function App() {
   const [analytics, setAnalytics] = useState([])
   const [leads, setLeads] = useState([])
   const [leadSource, setLeadSource] = useState('')
+  const [leadQuery, setLeadQuery] = useState('')
+  const [expandedLead, setExpandedLead] = useState(null)
+  const [leadToast, setLeadToast] = useState('')
   const [settings, setSettings] = useState({
-    theme: { red: '#dc2626', black: '#000000', white: '#ffffff' },
+    theme: { red: '#dc2626', green: '#15803d', black: '#000000', white: '#ffffff' },
     pricing: { starter: 299, growth: 499, pro: 799, currency: 'USD' },
   })
 
@@ -229,6 +270,29 @@ export default function App() {
     }
   }, [threads, messages])
 
+  const filteredLeads = useMemo(() => {
+    const rows = Array.isArray(leads) ? leads : []
+    const q = String(leadQuery || '').trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter((l) => {
+      const website = String(l.website_url || l.chatbot_website_url || '').trim()
+      const hay = [
+        l.source,
+        l.business_name,
+        l.name,
+        l.email,
+        l.phone,
+        website,
+        l.chatbot_id,
+        l.chatbot_title,
+        l.message,
+      ]
+        .map((x) => String(x || '').toLowerCase())
+        .join(' ')
+      return hay.includes(q)
+    })
+  }, [leads, leadQuery])
+
   const authedFetch = useCallback(
     async (url, init = {}) => {
       const headers = new Headers(init.headers || {})
@@ -247,6 +311,19 @@ export default function App() {
     },
     [authToken],
   )
+
+  async function copyLeadText(label, value) {
+    const text = String(value || '').trim()
+    if (!text) return
+    try {
+      await window.navigator.clipboard.writeText(text)
+      setLeadToast(`${label} copied`)
+      window.setTimeout(() => setLeadToast(''), 1600)
+    } catch {
+      // clipboard may be blocked; fall back to a simple prompt
+      window.prompt(`Copy ${label}`, text)
+    }
+  }
 
   async function loginAdmin(e) {
     e.preventDefault()
@@ -709,6 +786,7 @@ export default function App() {
       className="admin"
       style={{
         '--red': settings.theme?.red || '#dc2626',
+        '--green': settings.theme?.green || '#15803d',
         '--black': settings.theme?.black || '#000000',
         '--white': settings.theme?.white || '#ffffff',
       }}
@@ -978,7 +1056,14 @@ export default function App() {
             <Panel
               title="Leads"
               right={
-                <div className="search-row">
+                <div className="lead-toolbar">
+                  <input
+                    className="input"
+                    value={leadQuery}
+                    onChange={(e) => setLeadQuery(e.target.value)}
+                    placeholder="Search name, email, phone, website, bot…"
+                    aria-label="Search leads"
+                  />
                   <select
                     className="input"
                     value={leadSource}
@@ -1003,105 +1088,123 @@ export default function App() {
               <div className="record-strip">
                 <div className="record-strip__item">
                   <span className="record-strip__k">Leads loaded</span>
-                  <span className="record-strip__v">{fmtNumber(leads.length)}</span>
+                  <span className="record-strip__v">{fmtNumber(filteredLeads.length)}</span>
                 </div>
                 <div className="record-strip__item">
                   <span className="record-strip__k">Request a demo</span>
                   <span className="record-strip__v">
-                    {fmtNumber(leads.filter((l) => String(l.source || '') === 'contact-demo').length)}
+                    {fmtNumber(filteredLeads.filter((l) => String(l.source || '') === 'contact-demo').length)}
                   </span>
                 </div>
                 <div className="record-strip__item">
                   <span className="record-strip__k">Trial expired</span>
                   <span className="record-strip__v">
-                    {fmtNumber(leads.filter((l) => String(l.source || '') === 'trial-expired').length)}
+                    {fmtNumber(filteredLeads.filter((l) => String(l.source || '') === 'trial-expired').length)}
                   </span>
                 </div>
                 <div className="record-strip__item">
                   <span className="record-strip__k">Last lead</span>
-                  <span className="record-strip__v">{leads[0]?.created_at ? formatRelativeFromIso(leads[0].created_at) : '—'}</span>
+                  <span className="record-strip__v">
+                    {filteredLeads[0]?.created_at ? formatRelativeFromIso(filteredLeads[0].created_at) : '—'}
+                  </span>
                 </div>
               </div>
 
-              <Table>
-                <thead>
-                  <tr>
-                    <th>When</th>
-                    <th>Source</th>
-                    <th>Business / Name</th>
-                    <th>Contact</th>
-                    <th>Website</th>
-                    <th>Chatbot</th>
-                    <th>Message</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {leads.length ? (
-                    leads.map((l) => {
-                      const src = String(l.source || '')
-                      const srcLabel = src === 'contact-demo' ? 'Request a demo' : src === 'trial-expired' ? 'Trial expired' : src || 'Lead'
-                      const website = String(l.website_url || l.chatbot_website_url || '').trim()
-                      const businessOrName = String(l.business_name || l.name || '').trim() || '—'
-                      const email = String(l.email || '').trim()
-                      const phone = String(l.phone || '').trim()
-                      const botId = String(l.chatbot_id || '').trim()
-                      const botTitle = String(l.chatbot_title || '').trim()
+              {leadToast ? <div className="toast">{leadToast}</div> : null}
 
-                      return (
-                        <tr key={l.id}>
-                          <td className="cell-stack">
-                            <div className="cell-stack__primary">{formatIso(l.created_at)}</div>
-                            <div className="cell-stack__muted">{formatRelativeFromIso(l.created_at)}</div>
-                          </td>
-                          <td>
-                            <span className={`pill ${src === 'contact-demo' ? 'pill--active' : src === 'trial-expired' ? 'pill--ended' : ''}`}>
-                              {srcLabel}
-                            </span>
-                          </td>
-                          <td className="cell-stack">
-                            <div className="cell-stack__primary">{businessOrName}</div>
-                            {botTitle ? <div className="cell-stack__muted">{botTitle}</div> : <div className="cell-stack__muted">—</div>}
-                          </td>
-                          <td className="cell-stack">
-                            <div className="cell-stack__primary">
-                              {email ? (
-                                <a className="table-link" href={`mailto:${email}`}>
-                                  {email}
-                                </a>
-                              ) : (
-                                '—'
-                              )}
+              <div className="lead-grid" role="list">
+                {filteredLeads.length ? (
+                  filteredLeads.map((l) => {
+                    const src = String(l.source || '')
+                    const srcLabel =
+                      src === 'contact-demo' ? 'Request a demo' : src === 'trial-expired' ? 'Trial expired' : src || 'Lead'
+                    const website = String(l.website_url || l.chatbot_website_url || '').trim()
+                    const businessOrName = String(l.business_name || l.name || '').trim() || '—'
+                    const email = String(l.email || '').trim()
+                    const phone = String(l.phone || '').trim()
+                    const botId = String(l.chatbot_id || '').trim()
+                    const botTitle = String(l.chatbot_title || '').trim()
+                    const initials = businessOrName
+                      .split(/\s+/)
+                      .slice(0, 2)
+                      .map((p) => p.slice(0, 1).toUpperCase())
+                      .join('')
+
+                    return (
+                      <button
+                        key={l.id}
+                        type="button"
+                        className="lead-card"
+                        onClick={() => setExpandedLead(l)}
+                        role="listitem"
+                      >
+                        <div className="lead-card__top">
+                          <div className="lead-avatar" aria-hidden="true">
+                            {initials || 'L'}
+                          </div>
+                          <div className="lead-title">
+                            <div className="lead-title__row">
+                              <span className="lead-title__name">{businessOrName}</span>
+                              <span
+                                className={`pill ${src === 'contact-demo' ? 'pill--active' : src === 'trial-expired' ? 'pill--ended' : ''}`}
+                              >
+                                {srcLabel}
+                              </span>
                             </div>
-                            <div className="cell-stack__muted">{phone || '—'}</div>
-                          </td>
-                          <td className="td-truncate" title={website}>
-                            {website ? (
-                              <a className="table-link" href={website} target="_blank" rel="noreferrer">
-                                {website}
+                            <div className="lead-title__meta">
+                              <span>{formatRelativeFromIso(l.created_at)}</span>
+                              <span>·</span>
+                              <span title={formatIso(l.created_at)}>{formatIso(l.created_at)}</span>
+                              {botId ? (
+                                <>
+                                  <span>·</span>
+                                  <span className="lead-chip" title={botTitle || ''}>
+                                    Bot {botId}
+                                  </span>
+                                </>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="lead-card__msg">{msgPreview(l.message || '', 200) || '—'}</div>
+
+                        <div className="lead-actions" onClick={(e) => e.stopPropagation()}>
+                          {email ? (
+                            <>
+                              <a className="lead-action" href={`mailto:${email}`}>
+                                Email
                               </a>
-                            ) : (
-                              '—'
-                            )}
-                          </td>
-                          <td className="cell-stack">
-                            <div className="cell-stack__primary">{botId || '—'}</div>
-                            <div className="cell-stack__muted">{l.trial_ends_at ? `Trial ends ${formatIso(l.trial_ends_at)}` : '—'}</div>
-                          </td>
-                          <td>
-                            <div className="lead-msg">{msgPreview(l.message || '', 140)}</div>
-                          </td>
-                        </tr>
-                      )
-                    })
-                  ) : (
-                    <tr>
-                      <td colSpan="7" className="table-empty">
-                        No leads found yet. (New “Request a demo” and “Trial expired” submissions will appear here.)
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </Table>
+                              <button type="button" className="lead-action lead-action--ghost" onClick={() => copyLeadText('Email', email)}>
+                                Copy
+                              </button>
+                            </>
+                          ) : (
+                            <span className="lead-action lead-action--disabled">No email</span>
+                          )}
+                          {phone ? (
+                            <a className="lead-action lead-action--ghost" href={`tel:${phone}`}>
+                              Call
+                            </a>
+                          ) : null}
+                          {website ? (
+                            <a className="lead-action lead-action--ghost" href={website} target="_blank" rel="noreferrer">
+                              Website
+                            </a>
+                          ) : null}
+                          <button type="button" className="lead-action lead-action--view" onClick={() => setExpandedLead(l)}>
+                            View
+                          </button>
+                        </div>
+                      </button>
+                    )
+                  })
+                ) : (
+                  <div className="empty-box">
+                    No leads found for this filter/search. New “Request a demo” and “Trial expired” submissions will appear here.
+                  </div>
+                )}
+              </div>
             </Panel>
           </section>
         ) : null}
@@ -1218,39 +1321,30 @@ export default function App() {
                 <div className="settings__card">
                   <p className="settings__title">Theme Colors (Frontend)</p>
                   <div className="settings__grid">
-                    <label>
-                      Red
-                      <input
-                        className="input"
-                        type="text"
-                        value={settings.theme?.red || ''}
-                        onChange={(e) =>
-                          setSettings((s) => ({ ...s, theme: { ...(s.theme || {}), red: e.target.value } }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      Black
-                      <input
-                        className="input"
-                        type="text"
-                        value={settings.theme?.black || ''}
-                        onChange={(e) =>
-                          setSettings((s) => ({ ...s, theme: { ...(s.theme || {}), black: e.target.value } }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      White
-                      <input
-                        className="input"
-                        type="text"
-                        value={settings.theme?.white || ''}
-                        onChange={(e) =>
-                          setSettings((s) => ({ ...s, theme: { ...(s.theme || {}), white: e.target.value } }))
-                        }
-                      />
-                    </label>
+                    <ThemeColorField
+                      label="Red"
+                      value={settings.theme?.red || ''}
+                      fallback="#dc2626"
+                      onChange={(v) => setSettings((s) => ({ ...s, theme: { ...(s.theme || {}), red: v } }))}
+                    />
+                    <ThemeColorField
+                      label="Green"
+                      value={settings.theme?.green || ''}
+                      fallback="#15803d"
+                      onChange={(v) => setSettings((s) => ({ ...s, theme: { ...(s.theme || {}), green: v } }))}
+                    />
+                    <ThemeColorField
+                      label="Black"
+                      value={settings.theme?.black || ''}
+                      fallback="#000000"
+                      onChange={(v) => setSettings((s) => ({ ...s, theme: { ...(s.theme || {}), black: v } }))}
+                    />
+                    <ThemeColorField
+                      label="White"
+                      value={settings.theme?.white || ''}
+                      fallback="#ffffff"
+                      onChange={(v) => setSettings((s) => ({ ...s, theme: { ...(s.theme || {}), white: v } }))}
+                    />
                   </div>
                 </div>
 
@@ -1325,6 +1419,95 @@ export default function App() {
                 <span>{formatIso(expandedMessage.created_at)}</span>
               </div>
               <pre className="modal-content">{expandedMessage.content}</pre>
+            </div>
+          </div>
+        ) : null}
+        {expandedLead ? (
+          <div className="modal-backdrop" onClick={() => setExpandedLead(null)}>
+            <div className="modal-card modal-card--wide" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-head">
+                <h3>Lead details</h3>
+                <button type="button" className="btn-ghost" onClick={() => setExpandedLead(null)}>
+                  Close
+                </button>
+              </div>
+              <div className="modal-meta">
+                <span>{String(expandedLead.source || 'lead')}</span>
+                <span>{formatIso(expandedLead.created_at)}</span>
+                {expandedLead.chatbot_id ? <span>Bot {expandedLead.chatbot_id}</span> : <span>—</span>}
+              </div>
+
+              <div className="lead-detail">
+                <div className="lead-detail__block">
+                  <p className="lead-detail__k">Business / Name</p>
+                  <p className="lead-detail__v">
+                    {String(expandedLead.business_name || expandedLead.name || '—')}
+                  </p>
+                  {expandedLead.chatbot_title ? (
+                    <p className="lead-detail__sub">{String(expandedLead.chatbot_title)}</p>
+                  ) : null}
+                </div>
+
+                <div className="lead-detail__block">
+                  <p className="lead-detail__k">Contact</p>
+                  <div className="lead-detail__row">
+                    <span className="lead-detail__v">{String(expandedLead.email || '—')}</span>
+                    {expandedLead.email ? (
+                      <button type="button" className="btn-ghost" onClick={() => copyLeadText('Email', expandedLead.email)}>
+                        Copy
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="lead-detail__row">
+                    <span className="lead-detail__sub">{String(expandedLead.phone || '—')}</span>
+                    {expandedLead.phone ? (
+                      <button type="button" className="btn-ghost" onClick={() => copyLeadText('Phone', expandedLead.phone)}>
+                        Copy
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="lead-detail__block">
+                  <p className="lead-detail__k">Website</p>
+                  {String(expandedLead.website_url || expandedLead.chatbot_website_url || '').trim() ? (
+                    <div className="lead-detail__row">
+                      <a
+                        className="table-link"
+                        href={String(expandedLead.website_url || expandedLead.chatbot_website_url)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {String(expandedLead.website_url || expandedLead.chatbot_website_url)}
+                      </a>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        onClick={() =>
+                          copyLeadText('Website', String(expandedLead.website_url || expandedLead.chatbot_website_url))
+                        }
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="lead-detail__sub">—</p>
+                  )}
+                  {expandedLead.trial_ends_at ? (
+                    <p className="lead-detail__sub">Trial ends {formatIso(expandedLead.trial_ends_at)}</p>
+                  ) : null}
+                </div>
+
+                <div className="lead-detail__block lead-detail__block--full">
+                  <p className="lead-detail__k">Message</p>
+                  <pre className="modal-content">{String(expandedLead.message || '').trim() || '—'}</pre>
+                  {String(expandedLead.message || '').trim() ? (
+                    <button type="button" className="btn-primary" onClick={() => copyLeadText('Message', expandedLead.message)}>
+                      Copy message
+                    </button>
+                  ) : null}
+                </div>
+              </div>
             </div>
           </div>
         ) : null}
