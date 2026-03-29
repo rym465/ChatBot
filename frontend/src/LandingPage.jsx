@@ -459,7 +459,61 @@ const PERSONAL_CHAT_COLOR_DEFAULTS = {
 }
 
 const CHAT_DOCK_COLOR_STORAGE_KEY = 'sitemind_chat_dock_master_color'
-// Tone is now admin-locked per chatbot (no user-side tone selector).
+const CHAT_DOCK_TONE_BY_BOT_KEY = 'sitemind_chat_dock_tone_by_bot'
+
+/** Same IDs/order as backend `CHAT_TONE_IDS` / admin panel. */
+const DOCK_REPLY_TONE_OPTIONS = [
+  { id: 'friendly', label: 'Friendly' },
+  { id: 'witty', label: 'Witty' },
+  { id: 'concise', label: 'Concise' },
+  { id: 'professional', label: 'Professional' },
+  { id: 'casual', label: 'Casual' },
+  { id: 'expert', label: 'Expert' },
+  { id: 'empathetic', label: 'Empathetic' },
+]
+
+const DOCK_REPLY_TONE_IDS = new Set(DOCK_REPLY_TONE_OPTIONS.map((t) => t.id))
+
+function normalizeDockReplyToneId(raw) {
+  const id = typeof raw === 'string' ? raw.trim() : ''
+  return DOCK_REPLY_TONE_IDS.has(id) ? id : 'professional'
+}
+
+function readDockToneForBot(chatbotId) {
+  const cid = String(chatbotId || '').trim()
+  if (!cid) return ''
+  try {
+    const raw = localStorage.getItem(CHAT_DOCK_TONE_BY_BOT_KEY)
+    if (!raw) return ''
+    const obj = JSON.parse(raw)
+    const v = obj && typeof obj === 'object' ? obj[cid] : ''
+    return typeof v === 'string' ? v.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+function writeDockToneForBot(chatbotId, toneId) {
+  const cid = String(chatbotId || '').trim()
+  if (!cid) return
+  const id = normalizeDockReplyToneId(toneId)
+  try {
+    const raw = localStorage.getItem(CHAT_DOCK_TONE_BY_BOT_KEY)
+    let obj = {}
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === 'object') obj = parsed
+      } catch {
+        obj = {}
+      }
+    }
+    obj[cid] = id
+    localStorage.setItem(CHAT_DOCK_TONE_BY_BOT_KEY, JSON.stringify(obj))
+  } catch {
+    /* ignore */
+  }
+}
 
 function readDockMasterColor() {
   try {
@@ -1282,6 +1336,7 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
   const [iqDone, setIqDone] = useState(false)
   const [iqErr, setIqErr] = useState('')
   const [masterColor, setMasterColor] = useState(() => readDockMasterColor())
+  const [replyToneId, setReplyToneId] = useState('professional')
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   const trialEnded = trialExpiredAtOpen || trialRanOut
@@ -1319,6 +1374,7 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
       setIqSubmitting(false)
       setIqDone(false)
       setIqErr('')
+      setReplyToneId('professional')
       return
     }
     skewRef.current = session.serverTime ? Date.parse(session.serverTime) - Date.now() : 0
@@ -1328,9 +1384,14 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
     setTrialExpiredAtOpen(!!session.trialExpired)
     setTrialRanOut(false)
     setCompanyContact(session.companyContact || null)
-    setChatbotId(session.chatbotId || '')
+    const cid = String(session.chatbotId || '').trim()
+    setChatbotId(cid)
     setThreadId(session.threadId || '')
     setAllHistory(Array.isArray(session.chatHistory) ? session.chatHistory : [])
+    const serverDef = normalizeDockReplyToneId(session.theme?.defaultToneId)
+    const stored = readDockToneForBot(cid)
+    const picked = stored && DOCK_REPLY_TONE_IDS.has(stored) ? stored : serverDef
+    setReplyToneId(picked)
     setDraft('')
     setChatErr('')
     setIqDone(false)
@@ -1402,7 +1463,7 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
       const res = await fetch(`${CHAT_TEST_BASE}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, message: text }),
+        body: JSON.stringify({ sessionId, message: text, tone: replyToneId }),
       })
       const data = await res.json().catch(() => ({}))
       if (res.status === 403 && data.trialExpired) {
@@ -1536,7 +1597,16 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
     }
   }, [])
 
-  const lockedToneId = String(theme?.defaultToneId || 'professional')
+  const setDockReplyTone = useCallback(
+    (nextId) => {
+      const id = normalizeDockReplyToneId(nextId)
+      setReplyToneId(id)
+      writeDockToneForBot(chatbotId, id)
+    },
+    [chatbotId],
+  )
+
+  const serverDefaultToneId = normalizeDockReplyToneId(theme?.defaultToneId)
 
   if (!session || !theme) return null
 
@@ -1688,8 +1758,21 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
               <div className="chat-widget-dock__settings-block">
                 <div className="chat-widget-dock__settings-head">
                   <span className="chat-widget-dock__settings-title">Reply tone</span>
-                  <span className="chat-widget-dock__settings-hint">Locked by admin: {lockedToneId}</span>
+                  <span className="chat-widget-dock__settings-hint">Saved for this browser · setup default: {serverDefaultToneId}</span>
                 </div>
+                <select
+                  className="chat-widget-dock__tone-select"
+                  value={replyToneId}
+                  onChange={(e) => setDockReplyTone(e.target.value)}
+                  aria-label="Reply tone for assistant messages"
+                >
+                  {DOCK_REPLY_TONE_OPTIONS.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="chat-widget-dock__settings-foot">The assistant uses this style for new replies while this chat is open.</p>
               </div>
             </div>
           ) : null}

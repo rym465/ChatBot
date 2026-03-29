@@ -1621,7 +1621,7 @@ export default function App() {
                 </div>
 
                 <div className="lead-detail__block">
-                  <p className="lead-detail__k">Reply tone (admin locked)</p>
+                  <p className="lead-detail__k">Default reply tone</p>
                   <select
                     className="input"
                     value={String(chatbotConfigModal.toneId || 'professional')}
@@ -1634,7 +1634,10 @@ export default function App() {
                       </option>
                     ))}
                   </select>
-                  <p className="lead-detail__sub">Widget + preview will always use this tone.</p>
+                  <p className="lead-detail__sub">
+                    Used for the embed widget and as the starting tone in the hosted trial chat. Visitors can choose any of
+                    the same presets in trial chat settings.
+                  </p>
                 </div>
 
                 <div className="lead-detail__block">

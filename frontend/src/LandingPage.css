@@ -2985,6 +2985,32 @@
   align-items: center;
 }
 
+.chat-widget-dock__tone-select {
+  width: 100%;
+  margin-top: 0.05rem;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  padding: 0.5rem 0.55rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  appearance: auto;
+}
+
+.chat-widget-dock__tone-select option {
+  color: #111111;
+  background: #ffffff;
+}
+
+.chat-widget-dock__settings-foot {
+  margin: 0.4rem 0 0;
+  font-size: 0.58rem;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.48);
+}
+
 .chat-widget-dock__color-input {
   width: 46px;
   height: 36px;

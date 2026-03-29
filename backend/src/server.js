@@ -1097,7 +1097,8 @@ app.post('/api/chatbot-test/message', async (req, res) => {
       })
     }
 
-    const toneId = normalizeChatToneId(s.toneId || tone)
+    const reqTone = typeof tone === 'string' ? tone.trim() : ''
+    const toneId = normalizeChatToneId(reqTone || s.toneId)
     const systemPrompt = buildChatSystemPrompt(s.inner, toneId)
     const history = s.history.map((m) => ({ role: m.role, content: m.content }))
 
