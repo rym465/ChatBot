@@ -225,6 +225,25 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
 }
 
+/* Full-color PNG / raster mark from `public/logo.png` (not the old monochrome icon treatment). */
+.nav__logo-badge--raster {
+  background: color-mix(in srgb, var(--white) 94%, var(--red) 6%);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--black) 24%, transparent);
+}
+
+.nav__logo-badge--raster .nav__logo-img {
+  filter: none;
+  opacity: 1;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.nav__logo-badge--footer.nav__logo-badge--raster .nav__logo-img {
+  width: 24px;
+  height: 24px;
+}
+
 .nav__logo-badge--fallback {
   background: transparent;
   box-shadow: none;

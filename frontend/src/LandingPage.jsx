@@ -327,10 +327,11 @@ const NAV_SECTION_LINKS = [
   { href: '#faq', label: 'FAQ' },
 ]
 
+const SITE_LOGO = `${import.meta.env.BASE_URL}logo.png`
+/** Fallback if `logo.png` fails to load (rare). */
 const LOCAL_SITE_MARK = `${import.meta.env.BASE_URL}favicon.svg`
-/** Set `VITE_LANDING_LOGO_URL` to any image URL (matches index.html favicon / OG when set at build). Chatbot uses only scraped `theme.logoUrl`. */
-const PREFERRED_LANDING_LOGO =
-  String(import.meta.env.VITE_LANDING_LOGO_URL || '').trim() || '/api/logo/admin.svg'
+/** Set `VITE_LANDING_LOGO_URL` to override. Chatbot avatars still use scraped `theme.logoUrl`. */
+const PREFERRED_LANDING_LOGO = String(import.meta.env.VITE_LANDING_LOGO_URL || '').trim() || SITE_LOGO
 
 function LandingMark({ variant = 'nav' }) {
   const footer = variant === 'footer'
@@ -344,12 +345,15 @@ function LandingMark({ variant = 'nav' }) {
     setSrc(LOCAL_SITE_MARK)
   }, [])
 
+  const rasterMark = !nativeFallback && /\.(png|jpe?g|webp)(\?|#|$)/i.test(String(src || ''))
+
   return (
     <span
       className={[
         'nav__logo-badge',
         footer ? 'nav__logo-badge--footer' : '',
         nativeFallback ? 'nav__logo-badge--fallback' : '',
+        rasterMark ? 'nav__logo-badge--raster' : '',
       ]
         .filter(Boolean)
         .join(' ')}
@@ -1854,7 +1858,7 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
                 }}
               >
                 <h2 className="chat-personal__expired-title">
-                  Continue with {companyContact?.name || 'SiteMind AI'}
+                  Continue with {companyContact?.name || 'ONYX Digital Space'}
                 </h2>
                 <p className="chat-personal__expired-lead">
                   Your trial is over. Leave your details and we’ll follow up with next steps.
@@ -2475,10 +2479,10 @@ export default function LandingPage() {
 
       <header className={`nav${menuOpen ? ' nav--open' : ''}`}>
         <div className="nav__inner">
-          <a href="#" className="nav__brand" aria-label="SiteMind AI">
+          <a href="#" className="nav__brand" aria-label="ONYX Digital Space">
             <LandingMark />
             <span className="nav__wordmark">
-              SiteMind <span className="nav__wordmark-ai">AI</span>
+              ONYX Digital <span className="nav__wordmark-ai">Space</span>
             </span>
           </a>
           <nav className="nav__links" aria-label="Page sections">
@@ -2590,7 +2594,7 @@ export default function LandingPage() {
                 <LiveImage
                   className="hero__main-img"
                   src={unsplash('photo-1581094794329-c8112a89af12', 1200)}
-                  alt="Technician working—home services teams use SiteMind to capture after-hours website visitors"
+                  alt="Technician working—home services teams use ONYX Digital Space chatbots to capture after-hours website visitors"
                   loading="eager"
                   sizes="(max-width: 999px) 100vw, 46vw"
                   width={800}
@@ -3040,7 +3044,7 @@ export default function LandingPage() {
           <div>
             <div className="footer__brand">
               <LandingMark variant="footer" />
-              <span>SiteMind AI</span>
+              <span>ONYX Digital Space</span>
             </div>
             <p className="footer__tag">
               White-label AI chatbots grounded in your website—built for home services and the agencies that serve them.
@@ -3064,19 +3068,19 @@ export default function LandingPage() {
             <h4 className="footer__h">Contact</h4>
             <ul className="footer__links">
               <li>
-                <a href="mailto:hello@sitemind.example">hello@sitemind.example</a>
+                <a href="mailto:AISupport@ONYXDigitalSpace.com">AISupport@ONYXDigitalSpace.com</a>
               </li>
               <li>
-                <a href="tel:+15555550199">(555) 555-0199</a>
+                <a href="tel:+17048980079">704 898 0079</a>
               </li>
-              <li>Mon–Fri · 9–5 local time</li>
+              <li>Mon–Fri · 9–5 Eastern</li>
             </ul>
           </div>
         </div>
         <div className="footer__bar">
           <div className="container footer__bar-inner">
             <small>
-              © {new Date().getFullYear()} SiteMind AI · Photos{' '}
+              © {new Date().getFullYear()} ONYX Digital Space · Photos{' '}
               <a href="https://unsplash.com" target="_blank" rel="noreferrer">
                 Unsplash
               </a>

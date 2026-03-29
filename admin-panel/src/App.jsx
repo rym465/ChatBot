@@ -71,9 +71,13 @@ function Sidebar({ active, onChange }) {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <img className="brand__badge-img" src={api('logo/admin.svg')} alt="Admin logo" />
+        <img
+          className="brand__badge-img"
+          src={`${import.meta.env.BASE_URL}logo.png`}
+          alt="ONYX Digital Space"
+        />
         <div>
-          <p className="brand__eyebrow">White Label AI</p>
+          <p className="brand__eyebrow">ONYX Digital Space</p>
           <h1 className="brand__title">Admin Panel</h1>
         </div>
       </div>
@@ -1707,6 +1711,14 @@ export default function App() {
             </div>
           </div>
         ) : null}
+
+        <footer className="admin-footer" aria-label="Support contact">
+          <a href="mailto:AISupport@ONYXDigitalSpace.com">AISupport@ONYXDigitalSpace.com</a>
+          <span className="admin-footer__sep" aria-hidden="true">
+            ·
+          </span>
+          <a href="tel:+17048980079">704 898 0079</a>
+        </footer>
       </main>
     </div>
   )
