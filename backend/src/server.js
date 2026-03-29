@@ -237,6 +237,9 @@ function verifyAdminToken(token) {
 }
 
 function requireAdminAuth(req, res, next) {
+  if (req.method === 'GET' && req.path === '/auth-info') {
+    return next()
+  }
   if (
     req.method === 'POST' &&
     (req.path === '/login' || req.path === '/reset-password/challenge' || req.path === '/reset-password/confirm')
@@ -1477,16 +1480,31 @@ app.post('/api/scrape', async (req, res) => {
 
 app.use('/api/admin', requireAdminAuth)
 
+app.get('/api/admin/auth-info', (_req, res) => {
+  try {
+    return res.json({
+      ok: true,
+      email: allowedAdminEmail(),
+      hint:
+        'Use this exact email (any case). Set ADMIN_LOGIN_EMAIL / ADMIN_LOGIN_PASSWORD on the API host for production.',
+    })
+  } catch (e) {
+    console.error('[admin/auth-info]', e)
+    return res.status(500).json({ ok: false, error: 'Could not load auth info' })
+  }
+})
+
 app.post('/api/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body || {}
     const inputEmail = normalizeAdminEmail(email)
-    const inputPassword = String(password || '').trim()
+    const inputPassword = String(password ?? '').trim()
     if (!inputEmail || !inputPassword) {
       return res.status(400).json({ ok: false, error: 'Email and password are required' })
     }
     const cfg = adminCredentialConfig()
-    if (!emailsMatchAllowed(inputEmail) || inputPassword !== cfg.password) {
+    const expectedPw = String(cfg.password || '').trim()
+    if (!emailsMatchAllowed(inputEmail) || inputPassword !== expectedPw) {
       return res.status(401).json({ ok: false, error: 'Invalid email or password' })
     }
     const token = createAdminToken(inputEmail)
@@ -1511,7 +1529,7 @@ app.post('/api/admin/reset-password/challenge', async (req, res) => {
     if (!emailsMatchAllowed(email)) {
       return res.status(400).json({
         ok: false,
-        error: 'Use the administrator email on file (Renee@onyxdigitalspace.com).',
+        error: `Use the administrator email for this server (${allowedAdminEmail()}).`,
       })
     }
     const resetToken = createPasswordResetToken()

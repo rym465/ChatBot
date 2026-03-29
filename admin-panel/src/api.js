@@ -34,6 +34,7 @@ export function api(path) {
 export const ADMIN_LOGIN_EMAIL_DISPLAY = 'Renee@onyxdigitalspace.com'
 
 export const ADMIN_API = {
+  authInfo: api('admin/auth-info'),
   login: api('admin/login'),
   resetPasswordChallenge: api('admin/reset-password/challenge'),
   resetPasswordConfirm: api('admin/reset-password/confirm'),

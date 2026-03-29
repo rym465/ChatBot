@@ -2,33 +2,50 @@ import fs from 'fs'
 import path from 'path'
 import { getDataRoot } from './dataPaths.js'
 
-/** Only this account may sign in to the admin panel (case-insensitive). */
+/**
+ * Default admin email when `ADMIN_LOGIN_EMAIL` is unset (case-insensitive match at login).
+ * Override on the server with `ADMIN_LOGIN_EMAIL` so hosting matches your panel without redeploying the admin UI.
+ */
 export const ADMIN_ALLOWED_EMAIL = 'renee@onyxdigitalspace.com'
 
-/** Initial / fallback until overridden by env or `setAdminPassword` file. */
+/**
+ * Fallback password when no env and no `admin_login_password.txt`.
+ * Prefer `ADMIN_LOGIN_PASSWORD` on the host (quote values that contain `$`, e.g. Docker/Railway).
+ */
 const DEFAULT_ADMIN_PASSWORD = 'Jamaica28054$'
 
 function passwordFilePath() {
   return path.join(getDataRoot(), 'admin_login_password.txt')
 }
 
-export function allowedAdminEmail() {
-  return ADMIN_ALLOWED_EMAIL
-}
-
 export function normalizeAdminEmail(input) {
   return String(input || '').trim().toLowerCase()
 }
 
+export function allowedAdminEmail() {
+  const raw = String(process.env.ADMIN_LOGIN_EMAIL || '').trim()
+  if (raw && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
+    return normalizeAdminEmail(raw)
+  }
+  return ADMIN_ALLOWED_EMAIL
+}
+
 export function emailsMatchAllowed(input) {
-  return normalizeAdminEmail(input) === ADMIN_ALLOWED_EMAIL
+  return normalizeAdminEmail(input) === allowedAdminEmail()
 }
 
 /**
- * Active password: optional file (after reset) wins, then env, then default.
- * @returns {string}
+ * Password resolution (deployment-friendly):
+ * 1. `ADMIN_LOGIN_PASSWORD` when set and non-empty after trim — wins on Railway/Vercel APIs.
+ * 2. Else `data/admin_login_password.txt` (after “Forgot password” reset on a persistent disk).
+ * 3. Else built-in default.
  */
 export function getAdminPassword() {
+  const envKey = process.env.ADMIN_LOGIN_PASSWORD
+  if (envKey !== undefined && envKey !== null) {
+    const fromEnv = String(envKey).trim()
+    if (fromEnv.length >= 8) return fromEnv
+  }
   const fp = passwordFilePath()
   try {
     if (fs.existsSync(fp)) {
@@ -38,8 +55,6 @@ export function getAdminPassword() {
   } catch {
     /* ignore */
   }
-  const fromEnv = String(process.env.ADMIN_LOGIN_PASSWORD || '').trim()
-  if (fromEnv.length >= 8) return fromEnv
   return DEFAULT_ADMIN_PASSWORD
 }
 

@@ -1,5 +1,14 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ADMIN_API, ADMIN_LOGIN_EMAIL_DISPLAY } from './api.js'
+
+function formatEmailForHint(addr) {
+  const a = String(addr || '').trim()
+  if (!a) return ADMIN_LOGIN_EMAIL_DISPLAY
+  const [local, domain] = a.split('@')
+  if (!domain) return a
+  const nicerLocal = local ? local.charAt(0).toUpperCase() + local.slice(1) : local
+  return `${nicerLocal}@${domain}`
+}
 
 /** Login + password reset (no signup). Only the configured admin email is accepted. */
 export default function AdminAuth({ onLoggedIn }) {
@@ -44,8 +53,8 @@ export default function AdminAuth({ onLoggedIn }) {
     e.preventDefault()
     setErr('')
     setInfo('')
-    if (!canonicalEmailOk(email)) {
-      setErr(`Enter exactly: ${ADMIN_LOGIN_EMAIL_DISPLAY}`)
+      if (!canonicalEmailOk(email)) {
+      setErr(`Enter exactly: ${emailHint}`)
       return
     }
     setBusy(true)
@@ -124,6 +133,14 @@ export default function AdminAuth({ onLoggedIn }) {
         {view === 'login' ? (
           <form className="auth-form" onSubmit={onSubmitLogin}>
             <p className="auth-lead">Sign in to the admin panel. There is no self-signup.</p>
+            <p className="auth-hint">
+              Admin for this API: <strong>{emailHint}</strong>
+            </p>
+            {info ? (
+              <p className="auth-info" role="status">
+                {info}
+              </p>
+            ) : null}
             <label className="auth-label">
               Email
               <input
@@ -132,7 +149,7 @@ export default function AdminAuth({ onLoggedIn }) {
                 autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder={ADMIN_LOGIN_EMAIL_DISPLAY}
+                placeholder="Please enter your email"
                 required
               />
             </label>
@@ -144,6 +161,7 @@ export default function AdminAuth({ onLoggedIn }) {
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                placeholder="Please enter your password"
                 required
               />
             </label>
@@ -174,6 +192,9 @@ export default function AdminAuth({ onLoggedIn }) {
         {view === 'reset-email' ? (
           <form className="auth-form" onSubmit={onSubmitResetStep1}>
             <p className="auth-lead">Enter the admin email to reset your password.</p>
+            <p className="auth-hint">
+              Must match: <strong>{emailHint}</strong>
+            </p>
             <label className="auth-label">
               Email
               <input
@@ -182,7 +203,7 @@ export default function AdminAuth({ onLoggedIn }) {
                 autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder={ADMIN_LOGIN_EMAIL_DISPLAY}
+                placeholder="Please enter your email"
                 required
               />
             </label>
@@ -211,7 +232,7 @@ export default function AdminAuth({ onLoggedIn }) {
         {view === 'reset-confirm' ? (
           <form className="auth-form" onSubmit={onSubmitResetStep2}>
             <p className="auth-lead">
-              Choose a new password for <strong>{ADMIN_LOGIN_EMAIL_DISPLAY}</strong>. This step expires in about 15 minutes.
+              Choose a new password for <strong>{emailHint}</strong>. This step expires in about 15 minutes.
             </p>
             <label className="auth-label">
               New password
@@ -221,6 +242,7 @@ export default function AdminAuth({ onLoggedIn }) {
                 autoComplete="new-password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Please enter a new password"
                 minLength={8}
                 required
               />
@@ -233,6 +255,7 @@ export default function AdminAuth({ onLoggedIn }) {
                 autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Please confirm your new password"
                 minLength={8}
                 required
               />
