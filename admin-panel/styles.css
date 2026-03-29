@@ -88,6 +88,9 @@ body {
   border-right: 1px solid color-mix(in srgb, var(--red) 38%, transparent);
   background: linear-gradient(180deg, #060606 0%, #160909 100%);
   color: var(--white);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .brand {
@@ -1273,5 +1276,115 @@ th {
   table {
     min-width: 480px;
   }
+}
+
+.sidebar__logout {
+  margin-top: auto;
+  width: 100%;
+  justify-self: stretch;
+  border: 1px solid color-mix(in srgb, var(--white) 28%, transparent);
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  font-weight: 750;
+  color: var(--white);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sidebar__logout:hover {
+  background: color-mix(in srgb, var(--red) 22%, transparent);
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+}
+
+.auth-card {
+  width: min(420px, 100%);
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: var(--shadow);
+  padding: 1.35rem 1.4rem 1.5rem;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.1rem;
+}
+
+.auth-brand__logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  object-fit: contain;
+  border: 1px solid color-mix(in srgb, var(--black) 12%, transparent);
+}
+
+.auth-brand__eyebrow {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--text-muted);
+}
+
+.auth-brand__title {
+  margin: 0.1rem 0 0;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+}
+
+.auth-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.auth-lead {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.auth-label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.auth-err {
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  font-size: 0.86rem;
+  background: color-mix(in srgb, var(--red) 12%, var(--white));
+  color: color-mix(in srgb, var(--red) 92%, var(--black));
+  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+}
+
+.auth-info {
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  font-size: 0.86rem;
+  background: color-mix(in srgb, var(--green) 14%, var(--white));
+  color: color-mix(in srgb, var(--green) 95%, var(--black));
+  border: 1px solid color-mix(in srgb, var(--green) 35%, transparent);
+}
+
+.auth-submit {
+  width: 100%;
+  padding: 0.65rem 1rem;
+}
+
+.auth-link {
+  width: 100%;
+  text-align: center;
 }
 

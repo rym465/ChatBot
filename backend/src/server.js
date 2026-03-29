@@ -36,6 +36,13 @@ import { ensureTrialInquiryTable } from './trialInquiryDb.js'
 import { ensureHistorySchema } from './chatbotChatHistoryDb.js'
 import { isContactMailConfigured, sendContactDemoEmails } from './sendContactDemoEmails.js'
 import { getDataRoot } from './dataPaths.js'
+import {
+  allowedAdminEmail,
+  emailsMatchAllowed,
+  getAdminPassword,
+  normalizeAdminEmail,
+  setAdminPassword,
+} from './adminAuthStore.js'
 
 const PORT = Number(process.env.PORT) || 3000
 /** 3-day trial from first save (or from legacy record createdAt) */
@@ -110,8 +117,8 @@ const ADMIN_TOKEN_SECRET = String(process.env.ADMIN_LOGIN_TOKEN_SECRET || 'chang
 
 function adminCredentialConfig() {
   return {
-    email: String(process.env.ADMIN_LOGIN_EMAIL || 'admin@example.com').trim().toLowerCase(),
-    password: String(process.env.ADMIN_LOGIN_PASSWORD || 'admin123').trim(),
+    email: allowedAdminEmail(),
+    password: getAdminPassword(),
   }
 }
 
@@ -152,6 +159,49 @@ function signAdminTokenPart(payloadB64) {
   return crypto.createHmac('sha256', ADMIN_TOKEN_SECRET).update(String(payloadB64 || '')).digest('base64url')
 }
 
+function signPasswordResetPart(payloadB64) {
+  return crypto
+    .createHmac('sha256', ADMIN_TOKEN_SECRET)
+    .update(`pwreset|${String(payloadB64 || '')}`, 'utf8')
+    .digest('base64url')
+}
+
+const PASSWORD_RESET_TTL_MS = 15 * 60 * 1000
+
+function createPasswordResetToken() {
+  const payload = {
+    typ: 'pwreset',
+    email: allowedAdminEmail(),
+    exp: Date.now() + PASSWORD_RESET_TTL_MS,
+  }
+  const payloadB64 = encodeBase64Url(JSON.stringify(payload))
+  const sig = signPasswordResetPart(payloadB64)
+  return `${payloadB64}.${sig}`
+}
+
+function verifyPasswordResetToken(token) {
+  const parts = String(token || '').split('.')
+  if (parts.length !== 2) return null
+  const [payloadB64, sig] = parts
+  const expected = signPasswordResetPart(payloadB64)
+  const a = Buffer.from(String(sig || ''), 'utf8')
+  const b = Buffer.from(String(expected || ''), 'utf8')
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null
+  const raw = decodeBase64UrlToString(payloadB64)
+  if (!raw) return null
+  let payload = null
+  try {
+    payload = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (String(payload?.typ || '') !== 'pwreset') return null
+  const email = normalizeAdminEmail(payload?.email)
+  const exp = Number(payload?.exp || 0)
+  if (!emailsMatchAllowed(email) || !Number.isFinite(exp) || exp <= Date.now()) return null
+  return { email }
+}
+
 function createAdminToken(email) {
   const payload = {
     email,
@@ -179,14 +229,28 @@ function verifyAdminToken(token) {
   } catch {
     return null
   }
-  const email = String(payload?.email || '').trim().toLowerCase()
+  const email = normalizeAdminEmail(payload?.email)
   const exp = Number(payload?.exp || 0)
   if (!email || !Number.isFinite(exp) || exp <= Date.now()) return null
+  if (!emailsMatchAllowed(email)) return null
   return { email, expiresAt: exp }
 }
 
 function requireAdminAuth(req, res, next) {
-  // Admin panel auth disabled per product requirement.
+  if (
+    req.method === 'POST' &&
+    (req.path === '/login' || req.path === '/reset-password/challenge' || req.path === '/reset-password/confirm')
+  ) {
+    return next()
+  }
+  const auth = String(req.headers.authorization || '')
+  const m = auth.match(/^Bearer\s+(.+)$/i)
+  const token = m ? m[1].trim() : ''
+  const session = verifyAdminToken(token)
+  if (!session) {
+    return res.status(401).json({ ok: false, error: 'Unauthorized', code: 'ADMIN_AUTH_REQUIRED' })
+  }
+  req.adminEmail = session.email
   return next()
 }
 
@@ -1416,13 +1480,13 @@ app.use('/api/admin', requireAdminAuth)
 app.post('/api/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body || {}
-    const inputEmail = String(email || '').trim().toLowerCase()
+    const inputEmail = normalizeAdminEmail(email)
     const inputPassword = String(password || '').trim()
     if (!inputEmail || !inputPassword) {
       return res.status(400).json({ ok: false, error: 'Email and password are required' })
     }
     const cfg = adminCredentialConfig()
-    if (inputEmail !== cfg.email || inputPassword !== cfg.password) {
+    if (!emailsMatchAllowed(inputEmail) || inputPassword !== cfg.password) {
       return res.status(401).json({ ok: false, error: 'Invalid email or password' })
     }
     const token = createAdminToken(inputEmail)
@@ -1435,6 +1499,58 @@ app.post('/api/admin/login', async (req, res) => {
   } catch (e) {
     console.error('[admin/login]', e)
     return res.status(500).json({ ok: false, error: 'Could not login' })
+  }
+})
+
+app.post('/api/admin/reset-password/challenge', async (req, res) => {
+  try {
+    const email = normalizeAdminEmail(req.body?.email)
+    if (!email) {
+      return res.status(400).json({ ok: false, error: 'Email is required.' })
+    }
+    if (!emailsMatchAllowed(email)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Use the administrator email on file (Renee@onyxdigitalspace.com).',
+      })
+    }
+    const resetToken = createPasswordResetToken()
+    return res.json({
+      ok: true,
+      resetToken,
+      expiresInMs: PASSWORD_RESET_TTL_MS,
+    })
+  } catch (e) {
+    console.error('[admin/reset-password/challenge]', e)
+    return res.status(500).json({ ok: false, error: 'Could not start reset' })
+  }
+})
+
+app.post('/api/admin/reset-password/confirm', async (req, res) => {
+  try {
+    const { resetToken, newPassword, confirmPassword } = req.body || {}
+    const v = verifyPasswordResetToken(resetToken)
+    if (!v) {
+      return res.status(400).json({ ok: false, error: 'Reset session expired. Enter your email again.' })
+    }
+    const p1 = String(newPassword || '').trim()
+    const p2 = String(confirmPassword || '').trim()
+    if (p1.length < 8) {
+      return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters.' })
+    }
+    if (p1 !== p2) {
+      return res.status(400).json({ ok: false, error: 'New password and confirmation do not match.' })
+    }
+    try {
+      setAdminPassword(p1)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not save password'
+      return res.status(500).json({ ok: false, error: msg })
+    }
+    return res.json({ ok: true })
+  } catch (e) {
+    console.error('[admin/reset-password/confirm]', e)
+    return res.status(500).json({ ok: false, error: 'Could not reset password' })
   }
 })
 
@@ -2035,7 +2151,9 @@ app.listen(PORT, async () => {
   )
   console.log('POST /api/trial-inquiry — contact form after trial')
   console.log('POST /api/contact-demo — Request a demo (Nodemailer → owner + submitter)')
-  console.log('POST /api/admin/login — admin email/password login (no signup)')
+  console.log(
+    `POST /api/admin/login — admin login only (${allowedAdminEmail()}); reset via /api/admin/reset-password/*`,
+  )
   console.log('GET/PUT/DELETE /api/admin/* — requires Authorization: Bearer <token>')
   if (isContactMailConfigured()) {
     console.log(`Contact demo mail: leads → ${process.env.CONTACT_GMAIL_USER} (visitor email from form for confirmation)`)

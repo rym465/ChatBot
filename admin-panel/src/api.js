@@ -30,8 +30,13 @@ export function api(path) {
   return `${API_ROOT}/api/${p}`
 }
 
+/** Shown on login / reset forms (must match server `adminAuthStore`). */
+export const ADMIN_LOGIN_EMAIL_DISPLAY = 'Renee@onyxdigitalspace.com'
+
 export const ADMIN_API = {
   login: api('admin/login'),
+  resetPasswordChallenge: api('admin/reset-password/challenge'),
+  resetPasswordConfirm: api('admin/reset-password/confirm'),
   metrics: api('admin/metrics'),
   analytics: (days = 14) => api(`admin/analytics?days=${encodeURIComponent(String(days))}`),
   chatbots: (limit = 25) => api(`admin/chatbots?limit=${encodeURIComponent(String(limit))}`),

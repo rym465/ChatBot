@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import AdminAuth from './AdminAuth.jsx'
 import { ADMIN_API, api } from './api.js'
 
 function formatIso(iso) {
@@ -75,7 +76,7 @@ function pillClass(status) {
   return 'pill'
 }
 
-function Sidebar({ active, onChange }) {
+function Sidebar({ active, onChange, onLogout }) {
   const items = [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'chatbots', label: 'Chatbots' },
@@ -118,6 +119,12 @@ function Sidebar({ active, onChange }) {
         <p className="sidebar__value">Connected</p>
         <p className="sidebar__hint">Live metrics from backend API</p>
       </div>
+
+      {typeof onLogout === 'function' ? (
+        <button type="button" className="sidebar__logout btn-ghost" onClick={onLogout}>
+          Sign out
+        </button>
+      ) : null}
     </aside>
   )
 }
@@ -190,7 +197,7 @@ function ThemeColorField({ label, value, fallback, onChange }) {
   )
 }
 
-export default function App() {
+function AdminDashboard({ authedFetch, onLogout }) {
   const [active, setActive] = useState('dashboard')
 
   const [metrics, setMetrics] = useState(null)
@@ -311,8 +318,6 @@ export default function App() {
       return hay.includes(q)
     })
   }, [leads, leadQuery])
-
-  const authedFetch = useCallback(async (url, init = {}) => fetch(url, init), [])
 
   /** Core fetches (throw on failure). Used by refresh orchestration to avoid parallel loaders clobbering `error` / `loading`. */
   async function pullMetrics() {
@@ -893,7 +898,7 @@ export default function App() {
         '--white': settings.theme?.white || '#ffffff',
       }}
     >
-      <Sidebar active={active} onChange={setActive} />
+      <Sidebar active={active} onChange={setActive} onLogout={onLogout} />
 
       <main className="content">
         <header className="topbar">
@@ -1780,4 +1785,62 @@ export default function App() {
     </div>
   )
 }
+
+const ADMIN_TOKEN_STORAGE_KEY = 'wl_admin_token_v1'
+
+function App() {
+  const [adminToken, setAdminToken] = useState(() => {
+    try {
+      return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || ''
+    } catch {
+      return ''
+    }
+  })
+
+  const authedFetch = useCallback(
+    async (url, init = {}) => {
+      const nextInit = init && typeof init === 'object' ? { ...init } : {}
+      const headers = new Headers(nextInit.headers || undefined)
+      if (adminToken) headers.set('Authorization', `Bearer ${adminToken}`)
+      const res = await fetch(url, { ...nextInit, headers })
+      if (res.status === 401 && adminToken) {
+        setAdminToken('')
+        try {
+          localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
+        } catch {
+          /* ignore */
+        }
+      }
+      return res
+    },
+    [adminToken],
+  )
+
+  const onLoggedIn = useCallback((token) => {
+    const t = String(token || '').trim()
+    setAdminToken(t)
+    try {
+      if (t) localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, t)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const onLogout = useCallback(() => {
+    setAdminToken('')
+    try {
+      localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  if (!String(adminToken || '').trim()) {
+    return <AdminAuth onLoggedIn={onLoggedIn} />
+  }
+
+  return <AdminDashboard authedFetch={authedFetch} onLogout={onLogout} />
+}
+
+export default App
 

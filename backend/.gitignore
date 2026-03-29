@@ -5,3 +5,6 @@ node_modules
 # Optional; if committed, it often mismatches developers' Chrome. Default: Selenium Manager downloads a matching driver.
 
 # Encrypted chatbot context bundles (user data)
+
+# Local admin password after reset-password (never commit)
+data/admin_login_password.txt
