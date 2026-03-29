@@ -1189,6 +1189,7 @@ export default function App() {
                     <option value="">All sources</option>
                     <option value="contact-demo">Request a demo</option>
                     <option value="trial-expired">Trial expired</option>
+                    <option value="chat-session">Chat widget (visitor lead)</option>
                   </select>
                   <button
                     type="button"
@@ -1219,6 +1220,12 @@ export default function App() {
                   </span>
                 </div>
                 <div className="record-strip__item">
+                  <span className="record-strip__k">Chat widget</span>
+                  <span className="record-strip__v">
+                    {fmtNumber(filteredLeads.filter((l) => String(l.source || '') === 'chat-session').length)}
+                  </span>
+                </div>
+                <div className="record-strip__item">
                   <span className="record-strip__k">Last lead</span>
                   <span className="record-strip__v">
                     {filteredLeads[0]?.created_at ? formatRelativeFromIso(filteredLeads[0].created_at) : '—'}
@@ -1233,15 +1240,30 @@ export default function App() {
                   filteredLeads.map((l) => {
                     const src = String(l.source || '')
                     const srcLabel =
-                      src === 'contact-demo' ? 'Request a demo' : src === 'trial-expired' ? 'Trial expired' : src || 'Lead'
+                      src === 'contact-demo'
+                        ? 'Request a demo'
+                        : src === 'trial-expired'
+                          ? 'Trial expired'
+                          : src === 'chat-session'
+                            ? 'Chat widget'
+                            : src || 'Lead'
                     const website = String(l.website_url || l.chatbot_website_url || '').trim()
-                    const businessOrName = String(l.business_name || l.name || '').trim() || '—'
+                    const visitorName = String(l.name || '').trim()
+                    const businessName = String(l.business_name || '').trim()
+                    const titlePrimary = visitorName || businessName || '—'
+                    const titleSecondary =
+                      visitorName &&
+                      businessName &&
+                      visitorName.toLowerCase() !== businessName.toLowerCase()
+                        ? businessName
+                        : ''
                     const email = String(l.email || '').trim()
                     const phone = String(l.phone || '').trim()
                     const botId = String(l.chatbot_id || '').trim()
                     const botTitle = String(l.chatbot_title || '').trim()
-                    const initials = businessOrName
+                    const initials = (visitorName || businessName)
                       .split(/\s+/)
+                      .filter(Boolean)
                       .slice(0, 2)
                       .map((p) => p.slice(0, 1).toUpperCase())
                       .join('')
@@ -1260,9 +1282,24 @@ export default function App() {
                           </div>
                           <div className="lead-title">
                             <div className="lead-title__row">
-                              <span className="lead-title__name">{businessOrName}</span>
+                              <div className="lead-title__stack">
+                                <span className="lead-title__name">{titlePrimary}</span>
+                                {titleSecondary ? (
+                                  <span className="lead-title__biz" title={titleSecondary}>
+                                    {titleSecondary}
+                                  </span>
+                                ) : null}
+                              </div>
                               <span
-                                className={`pill ${src === 'contact-demo' ? 'pill--active' : src === 'trial-expired' ? 'pill--ended' : ''}`}
+                                className={`pill ${
+                                  src === 'contact-demo'
+                                    ? 'pill--active'
+                                    : src === 'trial-expired'
+                                      ? 'pill--ended'
+                                      : src === 'chat-session'
+                                        ? 'pill--chat'
+                                        : ''
+                                }`}
                               >
                                 {srcLabel}
                               </span>
@@ -1560,12 +1597,14 @@ export default function App() {
 
               <div className="lead-detail">
                 <div className="lead-detail__block">
-                  <p className="lead-detail__k">Business / Name</p>
-                  <p className="lead-detail__v">
-                    {String(expandedLead.business_name || expandedLead.name || '—')}
-                  </p>
+                  <p className="lead-detail__k">Visitor name</p>
+                  <p className="lead-detail__v">{String(expandedLead.name || '').trim() || '—'}</p>
+                </div>
+                <div className="lead-detail__block">
+                  <p className="lead-detail__k">Business / site</p>
+                  <p className="lead-detail__v">{String(expandedLead.business_name || '').trim() || '—'}</p>
                   {expandedLead.chatbot_title ? (
-                    <p className="lead-detail__sub">{String(expandedLead.chatbot_title)}</p>
+                    <p className="lead-detail__sub">Chatbot page: {String(expandedLead.chatbot_title)}</p>
                   ) : null}
                 </div>
 
