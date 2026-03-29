@@ -90,7 +90,9 @@ export async function listMessagesDb(chatbotId) {
     `SELECT id, thread_id AS "threadId", role, content, created_at AS "createdAt"
      FROM chatbot_chat_messages
      WHERE chatbot_id = $1
-     ORDER BY created_at ASC, id ASC`,
+     ORDER BY created_at ASC,
+              CASE WHEN role = 'user' THEN 0 WHEN role = 'assistant' THEN 1 ELSE 2 END ASC,
+              id ASC`,
     [chatbotId],
   )
   return (r.rows || []).map((row) => ({

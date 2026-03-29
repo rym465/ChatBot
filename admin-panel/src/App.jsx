@@ -11,6 +11,22 @@ function formatIso(iso) {
   }
 }
 
+/** Oldest first: user then assistant when timestamps tie (same DB transaction). */
+function sortChatMessagesChronological(rows) {
+  const arr = Array.isArray(rows) ? rows.slice() : []
+  return arr.sort((a, b) => {
+    const da = Date.parse(String(a.created_at ?? a.createdAt ?? ''))
+    const db = Date.parse(String(b.created_at ?? b.createdAt ?? ''))
+    const ta = Number.isFinite(da) ? da : 0
+    const tb = Number.isFinite(db) ? db : 0
+    if (ta !== tb) return ta - tb
+    const roleRank = (r) => (String(r.role || '') === 'user' ? 0 : 1)
+    const rr = roleRank(a) - roleRank(b)
+    if (rr !== 0) return rr
+    return String(a.id || '').localeCompare(String(b.id || ''), 'en')
+  })
+}
+
 function trialTimeLeft(iso) {
   const end = new Date(iso).getTime()
   if (!Number.isFinite(end)) return '—'
@@ -791,7 +807,7 @@ export default function App() {
       const res = await authedFetch(ADMIN_API.messages({ chatbotId: selectedChatbotId, threadId: tid, limit: 300 }))
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.ok) throw new Error(data?.error || 'Failed to load messages')
-      setMessages(Array.isArray(data.messages) ? data.messages : [])
+      setMessages(sortChatMessagesChronological(Array.isArray(data.messages) ? data.messages : []))
     } catch (e) {
       setMessages([])
       setError(e instanceof Error ? e.message : String(e))

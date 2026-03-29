@@ -1,6 +1,7 @@
 import crypto from 'crypto'
 
-const SESSION_TTL_MS = 3* 60 * 60 * 1000
+/** @deprecated Retained only if a session is created without `noSessionExpiry`; embed + hosted chat all use non-expiring sessions. */
+const SESSION_TTL_MS = 3 * 60 * 60 * 1000
 /** Keep last 20 visitor prompts (20 user + 20 assistant messages = 40). */
 const MAX_HISTORY_MESSAGES = 40
 

@@ -756,8 +756,12 @@ app.post('/api/chatbot-test/open', async (req, res) => {
     applyMasterColorToTheme(theme, cfg.masterColor)
     theme.defaultToneId = cfg.toneId
     const trialEndsAt = trialEndsAtFromRecord(record)
-    const trialExpired = Date.now() >= Date.parse(trialEndsAt)
-    const { sessionId, threadId } = createTestSession(inner, trialEndsAt, chatbotId, { toneId: cfg.toneId })
+    const { sessionId, threadId } = createTestSession(inner, trialEndsAt, chatbotId, {
+      toneId: cfg.toneId,
+      source: 'password',
+      noSessionExpiry: true,
+      trialBypass: true,
+    })
 
     let chatHistory = []
     try {
@@ -773,9 +777,9 @@ app.post('/api/chatbot-test/open', async (req, res) => {
       chatHistory,
       theme,
       chatbotId,
-      trialEndsAt,
+      trialEndsAt: '',
       serverTime: new Date().toISOString(),
-      trialExpired,
+      trialExpired: false,
       supportContact: supportContactMeta(),
     })
   } catch (e) {
@@ -784,7 +788,7 @@ app.post('/api/chatbot-test/open', async (req, res) => {
   }
 })
 
-// Landing preview auto-open (no password UX), but keeps strict trial/session restrictions.
+// Landing preview auto-open (no password UX). Sessions do not idle-expire; messaging is not trial-gated here.
 app.post('/api/chatbot-test/open-preview', async (req, res) => {
   try {
     const { chatbotId, previewSecret } = req.body || {}
@@ -822,8 +826,12 @@ app.post('/api/chatbot-test/open-preview', async (req, res) => {
     applyMasterColorToTheme(theme, cfg.masterColor)
     theme.defaultToneId = cfg.toneId
     const trialEndsAt = trialEndsAtFromRecord(record)
-    const trialExpired = Date.now() >= Date.parse(trialEndsAt)
-    const { sessionId, threadId } = createTestSession(inner, trialEndsAt, id, { source: 'preview', toneId: cfg.toneId })
+    const { sessionId, threadId } = createTestSession(inner, trialEndsAt, id, {
+      source: 'preview',
+      toneId: cfg.toneId,
+      noSessionExpiry: true,
+      trialBypass: true,
+    })
 
     let chatHistory = []
     try {
@@ -839,9 +847,9 @@ app.post('/api/chatbot-test/open-preview', async (req, res) => {
       chatHistory,
       theme,
       chatbotId: id,
-      trialEndsAt,
+      trialEndsAt: '',
       serverTime: new Date().toISOString(),
-      trialExpired,
+      trialExpired: false,
       supportContact: supportContactMeta(),
     })
   } catch (e) {
@@ -921,7 +929,6 @@ app.post('/api/widget/open', async (req, res) => {
     applyMasterColorToTheme(theme, cfg.masterColor)
     theme.defaultToneId = cfg.toneId
     const trialEndsAt = trialEndsAtFromRecord(record)
-    const trialExpired = Date.now() >= Date.parse(trialEndsAt)
     const { sessionId, threadId } = createTestSession(inner, trialEndsAt, id, {
       trialBypass: true,
       noSessionExpiry: true,
@@ -1129,7 +1136,7 @@ app.post('/api/chatbot-test/message', async (req, res) => {
     }
 
     const trialEndMs = Date.parse(s.trialEndsAt)
-    const bypassTrial = !!s?.trialBypass && String(s?.source || '') === 'widget'
+    const bypassTrial = !!s?.trialBypass
     if (!bypassTrial && !Number.isNaN(trialEndMs) && Date.now() >= trialEndMs) {
       return res.status(403).json({
         ok: false,
@@ -1636,7 +1643,9 @@ app.get('/api/admin/messages', async (req, res) => {
           `SELECT id, chatbot_id, role, content, created_at
            FROM public.chatbot_chat_messages
            WHERE chatbot_id = $1 AND thread_id::text = $2
-           ORDER BY created_at ASC, id ASC
+           ORDER BY created_at ASC,
+                    CASE WHEN role = 'user' THEN 0 WHEN role = 'assistant' THEN 1 ELSE 2 END ASC,
+                    id ASC
            LIMIT $3`,
           [chatbotId, threadId, limit],
         )
@@ -1644,7 +1653,9 @@ app.get('/api/admin/messages', async (req, res) => {
           `SELECT id, chatbot_id, role, content, created_at
            FROM public.chatbot_chat_messages
            WHERE thread_id::text = $1
-           ORDER BY created_at ASC, id ASC
+           ORDER BY created_at ASC,
+                    CASE WHEN role = 'user' THEN 0 WHEN role = 'assistant' THEN 1 ELSE 2 END ASC,
+                    id ASC
            LIMIT $2`,
           [threadId, limit],
         )
