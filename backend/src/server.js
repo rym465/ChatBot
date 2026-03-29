@@ -43,6 +43,15 @@ import {
   normalizeAdminEmail,
   setAdminPassword,
 } from './adminAuthStore.js'
+import {
+  adminUserExists,
+  ensureAdminUsersTable,
+  getFirstAdminEmail,
+  insertAdminUser,
+  seedAdminUserIfEmpty,
+  updateAdminUserPassword,
+  verifyAdminLogin,
+} from './adminUsersDb.js'
 
 const PORT = Number(process.env.PORT) || 3000
 /** 3-day trial from first save (or from legacy record createdAt) */
@@ -122,6 +131,19 @@ function adminCredentialConfig() {
   }
 }
 
+/** Ensures `admin_users` exists, seeds one row from env/legacy defaults if empty. */
+async function prepareAdminAuthDb() {
+  if (!isDatabaseEnabled()) return null
+  const pool = getPool()
+  if (!pool) return null
+  await ensureAdminUsersTable(pool)
+  await seedAdminUserIfEmpty(pool, {
+    email: allowedAdminEmail(),
+    plainPassword: getAdminPassword(),
+  })
+  return pool
+}
+
 function encodeBase64Url(value) {
   return Buffer.from(value, 'utf8').toString('base64url')
 }
@@ -168,10 +190,14 @@ function signPasswordResetPart(payloadB64) {
 
 const PASSWORD_RESET_TTL_MS = 15 * 60 * 1000
 
-function createPasswordResetToken() {
+function createPasswordResetToken(emailNorm) {
+  const email = normalizeAdminEmail(emailNorm)
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('Invalid email for reset token')
+  }
   const payload = {
     typ: 'pwreset',
-    email: allowedAdminEmail(),
+    email,
     exp: Date.now() + PASSWORD_RESET_TTL_MS,
   }
   const payloadB64 = encodeBase64Url(JSON.stringify(payload))
@@ -198,7 +224,7 @@ function verifyPasswordResetToken(token) {
   if (String(payload?.typ || '') !== 'pwreset') return null
   const email = normalizeAdminEmail(payload?.email)
   const exp = Number(payload?.exp || 0)
-  if (!emailsMatchAllowed(email) || !Number.isFinite(exp) || exp <= Date.now()) return null
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !Number.isFinite(exp) || exp <= Date.now()) return null
   return { email }
 }
 
@@ -231,8 +257,7 @@ function verifyAdminToken(token) {
   }
   const email = normalizeAdminEmail(payload?.email)
   const exp = Number(payload?.exp || 0)
-  if (!email || !Number.isFinite(exp) || exp <= Date.now()) return null
-  if (!emailsMatchAllowed(email)) return null
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !Number.isFinite(exp) || exp <= Date.now()) return null
   return { email, expiresAt: exp }
 }
 
@@ -242,7 +267,10 @@ function requireAdminAuth(req, res, next) {
   }
   if (
     req.method === 'POST' &&
-    (req.path === '/login' || req.path === '/reset-password/challenge' || req.path === '/reset-password/confirm')
+    (req.path === '/login' ||
+      req.path === '/reset-password/challenge' ||
+      req.path === '/reset-password/confirm' ||
+      req.path === '/bootstrap-account')
   ) {
     return next()
   }
@@ -1480,17 +1508,70 @@ app.post('/api/scrape', async (req, res) => {
 
 app.use('/api/admin', requireAdminAuth)
 
-app.get('/api/admin/auth-info', (_req, res) => {
+app.get('/api/admin/auth-info', async (_req, res) => {
   try {
+    let emailHint = allowedAdminEmail()
+    let authSource = 'env'
+    try {
+      const pool = await prepareAdminAuthDb()
+      if (pool) {
+        authSource = 'database'
+        const first = await getFirstAdminEmail(pool)
+        if (first) emailHint = first
+      }
+    } catch (prepErr) {
+      console.warn('[admin/auth-info] db prepare', prepErr)
+    }
     return res.json({
       ok: true,
-      email: allowedAdminEmail(),
+      email: emailHint,
+      authSource,
       hint:
-        'Use this exact email (any case). Set ADMIN_LOGIN_EMAIL / ADMIN_LOGIN_PASSWORD on the API host for production.',
+        authSource === 'database'
+          ? 'Admins are stored in Postgres (admin_users). Add rows with SQL or POST /api/admin/bootstrap-account when ADMIN_BOOTSTRAP_TOKEN is set.'
+          : 'DATABASE_URL not set: using env/file admin password. Set DATABASE_URL to use admin_users.',
     })
   } catch (e) {
     console.error('[admin/auth-info]', e)
     return res.status(500).json({ ok: false, error: 'Could not load auth info' })
+  }
+})
+
+app.post('/api/admin/bootstrap-account', async (req, res) => {
+  try {
+    const expected = String(process.env.ADMIN_BOOTSTRAP_TOKEN || '').trim()
+    if (!expected || expected.length < 16) {
+      return res.status(404).json({ ok: false, error: 'Bootstrap is not enabled (set ADMIN_BOOTSTRAP_TOKEN on the API).' })
+    }
+    const token = String(req.body?.bootstrapToken || '').trim()
+    if (!token || token !== expected) {
+      return res.status(403).json({ ok: false, error: 'Invalid bootstrap token.' })
+    }
+    if (!isDatabaseEnabled() || !getPool()) {
+      return res.status(503).json({ ok: false, error: 'DATABASE_URL is required for admin_users.' })
+    }
+    const email = normalizeAdminEmail(req.body?.email)
+    const pw = String(req.body?.password || '').trim()
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ ok: false, error: 'Valid email is required.' })
+    }
+    if (pw.length < 8) {
+      return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters.' })
+    }
+    const pool = getPool()
+    await ensureAdminUsersTable(pool)
+    try {
+      await insertAdminUser(pool, email, pw)
+    } catch (ins) {
+      if (ins && ins.code === '23505') {
+        return res.status(409).json({ ok: false, error: 'That email is already registered.' })
+      }
+      throw ins
+    }
+    return res.json({ ok: true, email })
+  } catch (e) {
+    console.error('[admin/bootstrap-account]', e)
+    return res.status(500).json({ ok: false, error: 'Could not create account' })
   }
 })
 
@@ -1502,6 +1583,27 @@ app.post('/api/admin/login', async (req, res) => {
     if (!inputEmail || !inputPassword) {
       return res.status(400).json({ ok: false, error: 'Email and password are required' })
     }
+
+    try {
+      const pool = await prepareAdminAuthDb()
+      if (pool) {
+        const auth = await verifyAdminLogin(pool, inputEmail, inputPassword)
+        if (auth.ok) {
+          const token = createAdminToken(auth.email)
+          return res.json({
+            ok: true,
+            token,
+            admin: { email: auth.email },
+            expiresInMs: ADMIN_SESSION_TTL_MS,
+          })
+        }
+        return res.status(401).json({ ok: false, error: 'Invalid email or password' })
+      }
+    } catch (dbErr) {
+      console.error('[admin/login] database auth', dbErr)
+      return res.status(503).json({ ok: false, error: 'Admin database unavailable. Try again shortly.' })
+    }
+
     const cfg = adminCredentialConfig()
     const expectedPw = String(cfg.password || '').trim()
     if (!emailsMatchAllowed(inputEmail) || inputPassword !== expectedPw) {
@@ -1526,13 +1628,30 @@ app.post('/api/admin/reset-password/challenge', async (req, res) => {
     if (!email) {
       return res.status(400).json({ ok: false, error: 'Email is required.' })
     }
-    if (!emailsMatchAllowed(email)) {
-      return res.status(400).json({
-        ok: false,
-        error: `Use the administrator email for this server (${allowedAdminEmail()}).`,
-      })
+
+    try {
+      const pool = await prepareAdminAuthDb()
+      if (pool) {
+        if (!(await adminUserExists(pool, email))) {
+          return res.status(400).json({
+            ok: false,
+            error: 'No admin account with that email. Check spelling or add a row in admin_users.',
+          })
+        }
+      } else {
+        if (!emailsMatchAllowed(email)) {
+          return res.status(400).json({
+            ok: false,
+            error: `Use the administrator email for this server (${allowedAdminEmail()}).`,
+          })
+        }
+      }
+    } catch (dbErr) {
+      console.error('[admin/reset-password/challenge] db', dbErr)
+      return res.status(503).json({ ok: false, error: 'Could not verify email. Try again shortly.' })
     }
-    const resetToken = createPasswordResetToken()
+
+    const resetToken = createPasswordResetToken(email)
     return res.json({
       ok: true,
       resetToken,
@@ -1559,8 +1678,14 @@ app.post('/api/admin/reset-password/confirm', async (req, res) => {
     if (p1 !== p2) {
       return res.status(400).json({ ok: false, error: 'New password and confirmation do not match.' })
     }
+
     try {
-      setAdminPassword(p1)
+      const pool = await prepareAdminAuthDb()
+      if (pool) {
+        await updateAdminUserPassword(pool, v.email, p1)
+      } else {
+        setAdminPassword(p1)
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not save password'
       return res.status(500).json({ ok: false, error: msg })

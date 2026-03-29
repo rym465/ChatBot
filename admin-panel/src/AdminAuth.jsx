@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ADMIN_API, ADMIN_LOGIN_EMAIL_DISPLAY } from './api.js'
 
 function formatEmailForHint(addr) {
@@ -21,9 +21,23 @@ export default function AdminAuth({ onLoggedIn }) {
   const [err, setErr] = useState('')
   const [info, setInfo] = useState('')
   const [busy, setBusy] = useState(false)
+  const [emailHint, setEmailHint] = useState(() => formatEmailForHint(ADMIN_LOGIN_EMAIL_DISPLAY))
 
-  const canonicalEmailOk = useCallback((value) => {
-    return String(value || '').trim().toLowerCase() === ADMIN_LOGIN_EMAIL_DISPLAY.trim().toLowerCase()
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(ADMIN_API.authInfo)
+        const data = await res.json().catch(() => ({}))
+        if (cancelled || !data.ok || !data.email) return
+        setEmailHint(formatEmailForHint(data.email))
+      } catch {
+        /* keep default hint */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const onSubmitLogin = async (e) => {
@@ -53,10 +67,6 @@ export default function AdminAuth({ onLoggedIn }) {
     e.preventDefault()
     setErr('')
     setInfo('')
-      if (!canonicalEmailOk(email)) {
-      setErr(`Enter exactly: ${emailHint}`)
-      return
-    }
     setBusy(true)
     try {
       const res = await fetch(ADMIN_API.resetPasswordChallenge, {
@@ -193,7 +203,7 @@ export default function AdminAuth({ onLoggedIn }) {
           <form className="auth-form" onSubmit={onSubmitResetStep1}>
             <p className="auth-lead">Enter the admin email to reset your password.</p>
             <p className="auth-hint">
-              Must match: <strong>{emailHint}</strong>
+              Use the email for an existing admin account (hint: <strong>{emailHint}</strong>).
             </p>
             <label className="auth-label">
               Email
@@ -232,7 +242,8 @@ export default function AdminAuth({ onLoggedIn }) {
         {view === 'reset-confirm' ? (
           <form className="auth-form" onSubmit={onSubmitResetStep2}>
             <p className="auth-lead">
-              Choose a new password for <strong>{emailHint}</strong>. This step expires in about 15 minutes.
+              Choose a new password for <strong>{formatEmailForHint(email) || emailHint}</strong>. This step expires in
+              about 15 minutes.
             </p>
             <label className="auth-label">
               New password
