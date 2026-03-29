@@ -687,7 +687,26 @@ function publicErrorMessage(raw, fallback = 'Something went wrong. Please try ag
   ) {
     return fallback
   }
+  if (
+    /unlock\s+again|session\s+expired|session\s+invalid|invalid\.?\s*unlock|check\s+your\s+password|with\s+your\s+password/i.test(
+      m,
+    )
+  ) {
+    return fallback
+  }
   return m
+}
+
+/** Never show raw server session/password wording in the chat composer area. */
+function chatComposerErrorMessage(raw, fallback = 'Could not send that. Try again.') {
+  if (raw == null || typeof raw !== 'string') return fallback
+  const m = raw.trim()
+  if (
+    /session|unlock|password|expired|invalid\s+knowledge|encrypt|save\s+your\s+context/i.test(m)
+  ) {
+    return fallback
+  }
+  return publicErrorMessage(m, fallback)
 }
 
 function DemoChatbotModal({ open, onClose, onAutoSessionReady }) {
@@ -902,7 +921,7 @@ function DemoChatbotModal({ open, onClose, onAutoSessionReady }) {
           phone: form.phone.trim(),
         },
         warning:
-          'Plain copy — anyone with this file can read it. Save below to lock your chatbot with a password.',
+          'Plain copy — anyone with this file can read it. Use Save your chatbot below for an encrypted server copy.',
       },
       `chatbot-context-${chatbotId || 'draft'}-plain.json`,
     )
@@ -1314,7 +1333,7 @@ function DemoChatbotModal({ open, onClose, onAutoSessionReady }) {
 /**
  * Bottom-right floating preview: animated launcher + expandable panel (trial expiry in header).
  */
-function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSession }) {
+function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSession, recoverPreviewSession }) {
   const [sessionId, setSessionId] = useState('')
   const [theme, setTheme] = useState(null)
   const [allHistory, setAllHistory] = useState([])
@@ -1467,6 +1486,31 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
     return () => document.removeEventListener('mousedown', close)
   }, [settingsOpen, panelOpen])
 
+  const recoverAndReplayLead = useCallback(async () => {
+    if (!recoverPreviewSession) return null
+    const next = await recoverPreviewSession()
+    if (!next?.sessionId) return null
+    const sid = next.sessionId
+    if (visitorLeadOk) {
+      const nm = vLeadName.trim()
+      const em = vLeadEmail.trim()
+      const ph = vLeadPhone.trim()
+      if (nm && em && ph && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+        for (let i = 0; i < 3; i++) {
+          const lr = await fetch(`${CHAT_TEST_BASE}/session-lead`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId: sid, name: nm, email: em, phone: ph }),
+          })
+          const ld = await lr.json().catch(() => ({}))
+          if (lr.ok && ld.ok) break
+          if (i < 2) await new Promise((r) => setTimeout(r, 320))
+        }
+      }
+    }
+    return sid
+  }, [recoverPreviewSession, visitorLeadOk, vLeadName, vLeadEmail, vLeadPhone])
+
   const handleLeadGateSubmit = async (ev) => {
     ev.preventDefault()
     setLeadGateErr('')
@@ -1488,12 +1532,25 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
     }
     setLeadGateSubmitting(true)
     try {
-      const res = await fetch(`${CHAT_TEST_BASE}/session-lead`, {
+      let activeSid = sessionId
+      let res = await fetch(`${CHAT_TEST_BASE}/session-lead`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, name: nm, email: em, phone: ph }),
+        body: JSON.stringify({ sessionId: activeSid, name: nm, email: em, phone: ph }),
       })
-      const data = await res.json().catch(() => ({}))
+      let data = await res.json().catch(() => ({}))
+      if (res.status === 401 && recoverPreviewSession) {
+        const next = await recoverPreviewSession()
+        if (next?.sessionId) {
+          activeSid = next.sessionId
+          res = await fetch(`${CHAT_TEST_BASE}/session-lead`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId: activeSid, name: nm, email: em, phone: ph }),
+          })
+          data = await res.json().catch(() => ({}))
+        }
+      }
       if (!res.ok || !data.ok) {
         const apiErr = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : ''
         throw new Error(apiErr || '__LEAD_GENERIC__')
@@ -1523,12 +1580,25 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
     ])
     setSending(true)
     try {
-      const res = await fetch(`${CHAT_TEST_BASE}/message`, {
+      let activeSid = sessionId
+      let res = await fetch(`${CHAT_TEST_BASE}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, message: text, tone: replyToneId }),
+        body: JSON.stringify({ sessionId: activeSid, message: text, tone: replyToneId }),
       })
-      const data = await res.json().catch(() => ({}))
+      let data = await res.json().catch(() => ({}))
+      for (let r = 0; r < 2 && res.status === 401 && recoverPreviewSession; r++) {
+        const reSid = await recoverAndReplayLead()
+        if (!reSid) break
+        activeSid = reSid
+        res = await fetch(`${CHAT_TEST_BASE}/message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: activeSid, message: text, tone: replyToneId }),
+        })
+        data = await res.json().catch(() => ({}))
+        if (res.status !== 401) break
+      }
       if (res.status === 403 && data.trialExpired) {
         setTrialRanOut(true)
         setAllHistory((prev) => prev.filter((m) => m.id !== tempId))
@@ -1539,7 +1609,12 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
         setVisitorLeadOk(false)
         setAllHistory((prev) => prev.filter((m) => m.id !== tempId))
         setDraft(text)
-        setChatErr(typeof data.error === 'string' ? data.error : 'Please complete the form above to chat.')
+        setChatErr(
+          chatComposerErrorMessage(
+            typeof data.error === 'string' ? data.error : '',
+            'Please complete the form above to chat.',
+          ),
+        )
         return
       }
       if (!res.ok || !data.ok) {
@@ -1584,7 +1659,7 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
     } catch (err) {
       const m = err instanceof Error ? err.message : ''
       const fallback = 'Message didn’t go through. Try again.'
-      setChatErr(m === '__CHAT_GENERIC__' ? fallback : publicErrorMessage(m, fallback))
+      setChatErr(m === '__CHAT_GENERIC__' ? fallback : chatComposerErrorMessage(m, fallback))
       setAllHistory((prev) => prev.filter((x) => x.id !== tempId))
       setDraft(text)
     } finally {
@@ -1858,7 +1933,7 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
                 }}
               >
                 <h2 className="chat-personal__expired-title">
-                  Continue with {companyContact?.name || 'ONYX Digital Space'}
+                  Continue with {companyContact?.name || 'ONYX AI'}
                 </h2>
                 <p className="chat-personal__expired-lead">
                   Your trial is over. Leave your details and we’ll follow up with next steps.
@@ -2263,16 +2338,10 @@ export default function LandingPage() {
     setDemoModalOpen(true)
   }, [])
   const closeDemoModal = useCallback(() => setDemoModalOpen(false), [])
-  const openPreviewSession = useCallback(async ({ chatbotId, previewSecret }, { openPanel = true } = {}) => {
+  const requestPreviewOpen = useCallback(async ({ chatbotId, previewSecret }) => {
     const cid = String(chatbotId || '').trim()
     const sec = String(previewSecret || '').trim()
-    if (!cid || !sec) return
-    // Persist on this browser so refresh keeps access until trial ends.
-    try {
-      window.localStorage.setItem(SAVED_BOOTSTRAP_KEY, JSON.stringify({ chatbotId: cid, previewSecret: sec }))
-    } catch {
-      /* ignore */
-    }
+    if (!cid || !sec) return { ok: false, error: 'Could not open chatbot' }
     const res = await fetch(`${CHAT_TEST_BASE}/open-preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2281,21 +2350,64 @@ export default function LandingPage() {
     const data = await res.json().catch(() => ({}))
     if (!res.ok || !data.ok) {
       const apiErr = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : 'Could not open chatbot'
-      throw new Error(apiErr)
+      return { ok: false, error: apiErr }
     }
-    setTestChatSession({
-      sessionId: data.sessionId,
-      threadId: data.threadId || '',
-      chatHistory: Array.isArray(data.chatHistory) ? data.chatHistory : [],
-      theme: data.theme,
-      trialEndsAt: data.trialEndsAt || '',
-      trialExpired: !!data.trialExpired,
-      companyContact: data.supportContact || null,
-      chatbotId: data.chatbotId || cid,
-      serverTime: data.serverTime,
-    })
-    setTestChatPanelOpen(!!openPanel)
+    return {
+      ok: true,
+      session: {
+        sessionId: data.sessionId,
+        threadId: data.threadId || '',
+        chatHistory: Array.isArray(data.chatHistory) ? data.chatHistory : [],
+        theme: data.theme,
+        trialEndsAt: data.trialEndsAt || '',
+        trialExpired: !!data.trialExpired,
+        companyContact: data.supportContact || null,
+        chatbotId: data.chatbotId || cid,
+        serverTime: data.serverTime,
+      },
+    }
   }, [])
+
+  const recoverPreviewSession = useCallback(async () => {
+    let raw = ''
+    try {
+      raw = String(window.localStorage.getItem(SAVED_BOOTSTRAP_KEY) || '')
+    } catch {
+      return null
+    }
+    if (!raw) return null
+    let boot = null
+    try {
+      boot = JSON.parse(raw)
+    } catch {
+      return null
+    }
+    const cid = String(boot?.chatbotId || '').trim()
+    const sec = String(boot?.previewSecret || '').trim()
+    if (!cid || !sec) return null
+    const result = await requestPreviewOpen({ chatbotId: cid, previewSecret: sec })
+    if (!result.ok) return null
+    setTestChatSession(result.session)
+    return result.session
+  }, [requestPreviewOpen])
+
+  const openPreviewSession = useCallback(
+    async ({ chatbotId, previewSecret }, { openPanel = true } = {}) => {
+      const cid = String(chatbotId || '').trim()
+      const sec = String(previewSecret || '').trim()
+      if (!cid || !sec) return
+      try {
+        window.localStorage.setItem(SAVED_BOOTSTRAP_KEY, JSON.stringify({ chatbotId: cid, previewSecret: sec }))
+      } catch {
+        /* ignore */
+      }
+      const result = await requestPreviewOpen({ chatbotId: cid, previewSecret: sec })
+      if (!result.ok) throw new Error(result.error)
+      setTestChatSession(result.session)
+      setTestChatPanelOpen(!!openPanel)
+    },
+    [requestPreviewOpen],
+  )
   const openTestChatbot = useCallback(() => {
     setMenuOpen(false)
     if (testChatSession) setTestChatPanelOpen(true)
@@ -2349,35 +2461,44 @@ export default function LandingPage() {
 
   useEffect(() => {
     let alive = true
-    async function load() {
+    let delayMs = 8000
+    let timer = null
+
+    const tick = async () => {
+      if (!alive) return
+      let ok = false
       try {
         const res = await fetch(PUBLIC_SETTINGS_API)
         const data = await res.json().catch(() => ({}))
-        if (!alive) return
-        if (!res.ok || !data.ok || !data.settings) return
-        if (data.settings.theme) {
-          setAdminTheme((t) => ({
-            ...t,
-            ...(data.settings.theme || {}),
-          }))
-        }
-        if (data.settings.pricing) {
-          const p = data.settings.pricing || {}
-          setAdminPricing((prev) => ({
-            starter: typeof p.starter === 'number' ? p.starter : prev.starter,
-            growth: typeof p.growth === 'number' ? p.growth : prev.growth,
-            pro: typeof p.pro === 'number' ? p.pro : prev.pro,
-          }))
+        if (alive && res.ok && data.ok && data.settings) {
+          ok = true
+          if (data.settings.theme) {
+            setAdminTheme((t) => ({
+              ...t,
+              ...(data.settings.theme || {}),
+            }))
+          }
+          if (data.settings.pricing) {
+            const p = data.settings.pricing || {}
+            setAdminPricing((prev) => ({
+              starter: typeof p.starter === 'number' ? p.starter : prev.starter,
+              growth: typeof p.growth === 'number' ? p.growth : prev.growth,
+              pro: typeof p.pro === 'number' ? p.pro : prev.pro,
+            }))
+          }
         }
       } catch {
-        /* ignore */
+        ok = false
       }
+      if (!alive) return
+      delayMs = ok ? 8000 : Math.min(Math.max(delayMs * 2, 8000), 120000)
+      timer = setTimeout(tick, delayMs)
     }
-    load()
-    const id = setInterval(load, 8000)
+
+    tick()
     return () => {
       alive = false
-      clearInterval(id)
+      if (timer) clearTimeout(timer)
     }
   }, [])
 
@@ -2479,10 +2600,10 @@ export default function LandingPage() {
 
       <header className={`nav${menuOpen ? ' nav--open' : ''}`}>
         <div className="nav__inner">
-          <a href="#" className="nav__brand" aria-label="ONYX Digital Space">
+          <a href="#" className="nav__brand" aria-label="ONYX AI">
             <LandingMark />
             <span className="nav__wordmark">
-              ONYX Digital <span className="nav__wordmark-ai">Space</span>
+              ONYX<span className="nav__wordmark-ai"> AI</span>
             </span>
           </a>
           <nav className="nav__links" aria-label="Page sections">
@@ -2594,7 +2715,7 @@ export default function LandingPage() {
                 <LiveImage
                   className="hero__main-img"
                   src={unsplash('photo-1581094794329-c8112a89af12', 1200)}
-                  alt="Technician working—home services teams use ONYX Digital Space chatbots to capture after-hours website visitors"
+                  alt="Technician working—home services teams use ONYX AI chatbots to capture after-hours website visitors"
                   loading="eager"
                   sizes="(max-width: 999px) 100vw, 46vw"
                   width={800}
@@ -3044,7 +3165,9 @@ export default function LandingPage() {
           <div>
             <div className="footer__brand">
               <LandingMark variant="footer" />
-              <span>ONYX Digital Space</span>
+              <span className="footer__wordmark">
+                ONYX<span className="footer__wordmark-ai"> AI</span>
+              </span>
             </div>
             <p className="footer__tag">
               White-label AI chatbots grounded in your website—built for home services and the agencies that serve them.
@@ -3080,7 +3203,7 @@ export default function LandingPage() {
         <div className="footer__bar">
           <div className="container footer__bar-inner">
             <small>
-              © {new Date().getFullYear()} ONYX Digital Space · Photos{' '}
+              © {new Date().getFullYear()} ONYX AI · Photos{' '}
               <a href="https://unsplash.com" target="_blank" rel="noreferrer">
                 Unsplash
               </a>
@@ -3098,6 +3221,7 @@ export default function LandingPage() {
         panelOpen={testChatPanelOpen}
         onPanelOpenChange={setTestChatPanelOpen}
         onEndSession={endTestChatSession}
+        recoverPreviewSession={recoverPreviewSession}
       />
     </div>
   )

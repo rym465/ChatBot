@@ -25,6 +25,19 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           timeout: 300000,
           proxyTimeout: 300000,
+          configure(proxy) {
+            proxy.on('error', (_err, _req, res) => {
+              if (!res || res.writableEnded || typeof res.writeHead !== 'function') return
+              try {
+                if (!res.headersSent) {
+                  res.writeHead(503, { 'Content-Type': 'application/json' })
+                  res.end(JSON.stringify({ ok: false, error: 'Backend unavailable' }))
+                }
+              } catch {
+                /* ignore */
+              }
+            })
+          },
         },
       },
     },

@@ -306,16 +306,35 @@
         }
         leadSubmitting = true
         render()
-        fetch(`${API_ROOT}/chatbot-test/session-lead`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, name: nm, email: em, phone: ph }),
-        })
-          .then((r) => r.json().then((d) => ({ r, d })))
-          .then(({ r, d }) => {
+        ;(async () => {
+          try {
+            let r = await fetch(`${API_ROOT}/chatbot-test/session-lead`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId, name: nm, email: em, phone: ph }),
+            })
+            let d = await r.json().catch(() => ({}))
+            for (let attempt = 0; attempt < 2 && r.status === 401; attempt++) {
+              try {
+                await ensureOpened(true)
+              } catch {
+                break
+              }
+              if (!sessionId) break
+              r = await fetch(`${API_ROOT}/chatbot-test/session-lead`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId, name: nm, email: em, phone: ph }),
+              })
+              d = await r.json().catch(() => ({}))
+              if (r.status !== 401) break
+            }
             leadSubmitting = false
             if (!r.ok || !d.ok) {
-              leadGateError.message = typeof d.error === 'string' && d.error.trim() ? d.error.trim() : 'Could not save.'
+              leadGateError.message = safeChatUserError(
+                typeof d.error === 'string' ? d.error : '',
+                'Could not save. Try again.',
+              )
               render()
               return
             }
@@ -323,12 +342,12 @@
             leadGateError.message = ''
             writeStoredLead({ name: nm, email: em, phone: ph })
             render()
-          })
-          .catch(() => {
+          } catch {
             leadSubmitting = false
             leadGateError.message = 'Network error. Try again.'
             render()
-          })
+          }
+        })()
       })
       body.appendChild(form)
       panel.appendChild(head)
@@ -413,12 +432,22 @@
     root.appendChild(panel)
   }
 
-  const SESSION_INVALID_RE = /session expired|session invalid|unlock again/i
+  const SESSION_INVALID_RE = /session expired|session invalid|unlock again|your password/i
 
   function isSessionInvalidResponse(res, data) {
     if (res.status === 401) return true
     const msg = typeof data?.error === 'string' ? data.error : ''
     return SESSION_INVALID_RE.test(msg)
+  }
+
+  /** Avoid showing raw server session/password strings in the widget. */
+  function safeChatUserError(raw, fallback) {
+    const fb = fallback || 'Something went wrong. Try again.'
+    const s = typeof raw === 'string' ? raw.trim() : ''
+    if (!s) return fb
+    if (/session|unlock|password|expired|invalid|encrypt|context/i.test(s)) return fb
+    if (s.length > 160) return fb
+    return s
   }
 
   async function postSessionLeadApi(name, email, phone) {
@@ -445,6 +474,10 @@
 
   async function ensureOpened(force = false) {
     if (!force && sessionId) return
+    if (force) {
+      sessionId = ''
+      threadId = ''
+    }
     errorState.message = ''
     leadGateError.message = ''
     render()
@@ -454,14 +487,14 @@
       body: JSON.stringify({ chatbotId: config.chatbotId, integrationSecret: config.integrationSecret }),
     })
     const data = await res.json().catch(() => ({}))
-    if (!res.ok || !data.ok) {
+      if (!res.ok || !data.ok) {
       const apiErr = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : 'Failed to open chatbot'
       if (res.status === 403 && data.trialExpired) {
         trialExpired = true
         trialEndsAtIso = data.trialEndsAt || ''
-        errorState.message = apiErr
+        errorState.message = safeChatUserError(apiErr, apiErr)
       } else {
-        errorState.message = apiErr
+        errorState.message = safeChatUserError(apiErr, 'Could not open chat. Try again.')
       }
       render()
       throw new Error(apiErr)
@@ -515,18 +548,18 @@
 
     let { res, data } = await postMessage(sessionId, text)
 
-    // Session may expire after idle/refresh; auto-open fresh session and retry once.
-    if (isSessionInvalidResponse(res, data)) {
+    // Server restart or stale id: open a fresh session and retry (up to two passes).
+    for (let pass = 0; pass < 2 && isSessionInvalidResponse(res, data); pass++) {
       try {
         await ensureOpened(true)
       } catch {
-        // keep original response handling below
+        break
       }
-      if (sessionId) {
-        const retry = await postMessage(sessionId, text)
-        res = retry.res
-        data = retry.data
-      }
+      if (!sessionId) break
+      const retry = await postMessage(sessionId, text)
+      res = retry.res
+      data = retry.data
+      if (!isSessionInvalidResponse(res, data)) break
     }
 
     if (res.status === 403 && data.trialExpired) {
@@ -553,7 +586,7 @@
     }
     if (!res.ok || !data.ok) {
       const apiErr = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : 'Message failed'
-      errorState.message = apiErr
+      errorState.message = safeChatUserError(apiErr, 'Could not send your message. Try again.')
       // Remove optimistic user message if server failed.
       allHistory = (allHistory || []).filter((m) => !(m && String(m.id || '') === optimisticId))
       render()

@@ -90,10 +90,12 @@ function Sidebar({ active, onChange }) {
         <img
           className="brand__badge-img"
           src={`${import.meta.env.BASE_URL}logo.png`}
-          alt="ONYX Digital Space"
+          alt="ONYX AI"
         />
         <div>
-          <p className="brand__eyebrow">ONYX Digital Space</p>
+          <p className="brand__eyebrow">
+            ONYX<span className="brand__eyebrow-ai"> AI</span>
+          </p>
           <h1 className="brand__title">Admin Panel</h1>
         </div>
       </div>

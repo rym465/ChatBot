@@ -1717,6 +1717,15 @@
   margin-bottom: 0.75rem;
 }
 
+.footer__wordmark {
+  color: var(--white);
+}
+
+.footer__wordmark-ai {
+  font-weight: 600;
+  color: var(--red);
+}
+
 .footer__tag {
   margin: 0;
   font-size: 0.9rem;

@@ -44,7 +44,7 @@ const TRIAL_MS = 3 * 24 * 60 * 60 * 1000
 function supportContactMeta() {
   const email = String(process.env.COMPANY_CONTACT_EMAIL || process.env.CONTACT_GMAIL_USER || '').trim()
   return {
-    name: String(process.env.COMPANY_CONTACT_NAME || 'Admin Support').trim(),
+    name: String(process.env.COMPANY_CONTACT_NAME || 'ONYX AI').trim(),
     email,
     phone: String(process.env.COMPANY_CONTACT_PHONE || '').trim(),
     address: String(process.env.COMPANY_CONTACT_ADDRESS || '').trim(),
@@ -1072,7 +1072,11 @@ app.post('/api/chatbot-test/session-lead', async (req, res) => {
     }
     const s = getTestSession(sessionId)
     if (!s) {
-      return res.status(401).json({ ok: false, error: 'Session expired or invalid.' })
+      return res.status(401).json({
+        ok: false,
+        code: 'SESSION_INVALID',
+        error: 'This chat session was reset. Your message was not sent—try again.',
+      })
     }
 
     const em = typeof email === 'string' ? email.trim().slice(0, 320) : ''
@@ -1132,7 +1136,11 @@ app.post('/api/chatbot-test/message', async (req, res) => {
 
     const s = getTestSession(sessionId)
     if (!s) {
-      return res.status(401).json({ ok: false, error: 'Session expired or invalid. Unlock again with your password.' })
+      return res.status(401).json({
+        ok: false,
+        code: 'SESSION_INVALID',
+        error: 'This chat session was reset. Please send your message again.',
+      })
     }
 
     const trialEndMs = Date.parse(s.trialEndsAt)
@@ -1213,7 +1221,11 @@ app.post('/api/chatbot-test/history', async (req, res) => {
     }
     const s = getTestSession(sessionId)
     if (!s || !s.chatbotId || !/^\d{8}$/.test(String(s.chatbotId))) {
-      return res.status(401).json({ ok: false, error: 'Session expired or invalid. Unlock again with your password.' })
+      return res.status(401).json({
+        ok: false,
+        code: 'SESSION_INVALID',
+        error: 'This chat session was reset. Try opening the chat again.',
+      })
     }
     const messages = await listChatMessages(s.chatbotId)
     res.json({ ok: true, messages, threadId: s.threadId })
@@ -1231,7 +1243,11 @@ app.post('/api/chatbot-test/clear', async (req, res) => {
     }
     const newThreadId = startNewChatThread(sessionId)
     if (!newThreadId) {
-      return res.status(401).json({ ok: false, error: 'Session expired or invalid. Unlock again with your password.' })
+      return res.status(401).json({
+        ok: false,
+        code: 'SESSION_INVALID',
+        error: 'This chat session was reset. Try starting a new conversation.',
+      })
     }
     res.json({ ok: true, threadId: newThreadId })
   } catch (e) {

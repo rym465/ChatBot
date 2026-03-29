@@ -121,6 +121,13 @@ body {
   margin: 0;
   opacity: 0.78;
   font-size: 0.78rem;
+  color: var(--white);
+}
+
+.brand__eyebrow-ai {
+  color: var(--red);
+  opacity: 1;
+  font-weight: 600;
 }
 
 .brand__title {
