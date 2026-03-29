@@ -54,6 +54,34 @@
 
   if (!config.chatbotId || !config.integrationSecret) return
 
+  function leadStorageKey() {
+    return `wl_embed_lead_v1_${String(config.chatbotId || '')}`
+  }
+
+  function readStoredLead() {
+    try {
+      const raw = localStorage.getItem(leadStorageKey())
+      if (!raw) return null
+      const o = JSON.parse(raw)
+      const name = String(o.name || '').trim()
+      const email = String(o.email || '').trim()
+      const phone = String(o.phone || '').trim()
+      if (!name || !phone) return null
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null
+      return { name, email, phone }
+    } catch {
+      return null
+    }
+  }
+
+  function writeStoredLead(payload) {
+    try {
+      localStorage.setItem(leadStorageKey(), JSON.stringify(payload))
+    } catch {
+      /* ignore */
+    }
+  }
+
   const ROOT_ID = `wl-chatbot-root-${config.chatbotId}`
   if (document.getElementById(ROOT_ID)) return
 
@@ -243,6 +271,12 @@
       const inName = labeledInput('Name *', 'name', 'text', 'name')
       const inEmail = labeledInput('Email *', 'email', 'email', 'email')
       const inPhone = labeledInput('Phone *', 'phone', 'tel', 'tel')
+      const pref = readStoredLead()
+      if (pref) {
+        inName.value = pref.name
+        inEmail.value = pref.email
+        inPhone.value = pref.phone
+      }
       const btn = document.createElement('button')
       btn.type = 'submit'
       btn.className = 'wl-lead-submit'
@@ -287,6 +321,7 @@
             }
             leadCaptured = true
             leadGateError.message = ''
+            writeStoredLead({ name: nm, email: em, phone: ph })
             render()
           })
           .catch(() => {
@@ -386,6 +421,28 @@
     return SESSION_INVALID_RE.test(msg)
   }
 
+  async function postSessionLeadApi(name, email, phone) {
+    if (!sessionId) return false
+    try {
+      const r = await fetch(`${API_ROOT}/chatbot-test/session-lead`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, name, email, phone }),
+      })
+      const d = await r.json().catch(() => ({}))
+      return !!(r.ok && d.ok)
+    } catch {
+      return false
+    }
+  }
+
+  /** Re-submit lead after a new sessionId (server restart, idle reconnect) so visitors are not blocked. */
+  async function applyStoredLeadIfAny() {
+    const st = readStoredLead()
+    if (!st) return false
+    return postSessionLeadApi(st.name, st.email, st.phone)
+  }
+
   async function ensureOpened(force = false) {
     if (!force && sessionId) return
     errorState.message = ''
@@ -419,8 +476,8 @@
     trialExpired = !!data.trialExpired
     supportContact = data.supportContact || null
     errorState.message = ''
-    leadCaptured = false
     leadGateError.message = ''
+    leadCaptured = await applyStoredLeadIfAny()
     render()
   }
 
@@ -479,12 +536,20 @@
       return
     }
     if (res.status === 428 && data.needLead) {
-      leadCaptured = false
-      errorState.message =
-        typeof data.error === 'string' && data.error.trim() ? data.error.trim() : 'Complete the contact form first.'
-      allHistory = (allHistory || []).filter((m) => !(m && String(m.id || '') === optimisticId))
-      render()
-      return
+      const recovered = await applyStoredLeadIfAny()
+      if (recovered && sessionId) {
+        const retryLead = await postMessage(sessionId, text)
+        res = retryLead.res
+        data = retryLead.data
+      }
+      if (res.status === 428 && data.needLead) {
+        leadCaptured = false
+        errorState.message =
+          typeof data.error === 'string' && data.error.trim() ? data.error.trim() : 'Complete the contact form first.'
+        allHistory = (allHistory || []).filter((m) => !(m && String(m.id || '') === optimisticId))
+        render()
+        return
+      }
     }
     if (!res.ok || !data.ok) {
       const apiErr = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : 'Message failed'

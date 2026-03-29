@@ -1904,7 +1904,7 @@ app.get('/api/admin/chatbot/:chatbotId/integration', async (req, res) => {
         'integrationSecret is like an API key: anyone with it can chat as this bot. Use admin Copy again to rotate.',
         'First Copy on an old row may re-crawl the stored website URL server-side (can take 1–2 minutes); keep the tab open.',
         'Flow: POST widget/open → POST chatbot-test/session-lead (name, email, phone) once → POST chatbot-test/message for each user message.',
-        'Sessions are server memory (~2h idle). Call widget/open again if you get session expired.',
+        'Widget embed: chat sessions do not idle-expire on the server; context is always loaded from your stored chatbot record (database/files) on each widget/open. In-memory sessionId is lost only when the API process restarts—the hosted widget.js reopens and replays session-lead from the visitor browser when possible.',
         'If widget.js is loaded from file:// or another domain than your API, add data-wl-api-origin="https://your-api-host" (no trailing slash) on the same <script> tag.',
         'Production: backend should set PUBLIC_API_ORIGIN=https://your-deployment.vercel.app (Vercel also sets VERCEL_URL) so this pack never lists 127.0.0.1 when you run admin locally.',
      ],
