@@ -586,6 +586,9 @@ export default function App() {
     const finalOpenUrl = enforceVercel.test(openUrl) || !openUrl ? `${configuredOrigin}/api/widget/open` : openUrl
     const finalMsgUrl =
       enforceVercel.test(msgUrl) || !msgUrl ? `${configuredOrigin}/api/chatbot-test/message` : msgUrl
+    const leadUrl = String(ep.sessionLead || '')
+    const finalLeadUrl =
+      enforceVercel.test(leadUrl) || !leadUrl ? `${configuredOrigin}/api/chatbot-test/session-lead` : leadUrl
     const finalHistUrl =
       enforceVercel.test(histUrl) || !histUrl ? `${configuredOrigin}/api/chatbot-test/history` : histUrl
     const finalClearUrl =
@@ -594,6 +597,8 @@ export default function App() {
     const openPayload = data.payload?.open && typeof data.payload.open === 'object' ? data.payload.open : {}
     const messagePayload =
       data.payload?.message && typeof data.payload.message === 'object' ? data.payload.message : {}
+    const leadPayload =
+      data.payload?.sessionLead && typeof data.payload.sessionLead === 'object' ? data.payload.sessionLead : {}
     const historyPayload =
       data.payload?.history && typeof data.payload.history === 'object' ? data.payload.history : {}
     const clearPayload =
@@ -604,12 +609,16 @@ export default function App() {
 
     const openJson = JSON.stringify(openPayload, null, 2)
     const msgJson = JSON.stringify(messagePayload, null, 2)
+    const leadJson = JSON.stringify(leadPayload, null, 2)
     const histJson = JSON.stringify(historyPayload, null, 2)
     const clearJson = JSON.stringify(clearPayload, null, 2)
 
     const curlOpen =
       finalOpenUrl &&
       `curl -X POST "${finalOpenUrl}" \\\n  -H "Content-Type: application/json" \\\n  -d '${openJson.replace(/'/g, "'\\''")}'`
+    const curlLead =
+      finalLeadUrl &&
+      `curl -X POST "${finalLeadUrl}" \\\n  -H "Content-Type: application/json" \\\n  -d '${leadJson.replace(/'/g, "'\\''")}'`
     const curlMsg =
       finalMsgUrl &&
       `curl -X POST "${finalMsgUrl}" \\\n  -H "Content-Type: application/json" \\\n  -d '${msgJson.replace(/'/g, "'\\''")}'`
@@ -642,7 +651,17 @@ export default function App() {
       ``,
       curlOpen || '',
       ``,
-      `--- 3) POST chat message ---`,
+      `--- 3) POST session lead (once per session, before chat messages) ---`,
+      `POST ${finalLeadUrl}`,
+      `Content-Type: application/json`,
+      ``,
+      leadJson,
+      ``,
+      `Response shape: ${String(shapes.sessionLead || '')}`,
+      ``,
+      curlLead || '',
+      ``,
+      `--- 4) POST chat message ---`,
       `POST ${finalMsgUrl}`,
       `Content-Type: application/json`,
       ``,
@@ -654,7 +673,7 @@ export default function App() {
       ``,
       curlMsg || '',
       ``,
-      `--- 4) Optional: history ---`,
+      `--- 5) Optional: history ---`,
       `POST ${finalHistUrl}`,
       `Content-Type: application/json`,
       ``,
@@ -662,7 +681,7 @@ export default function App() {
       ``,
       `Response shape: ${String(shapes.history || '')}`,
       ``,
-      `--- 5) Optional: clear thread ---`,
+      `--- 6) Optional: clear thread ---`,
       `POST ${finalClearUrl}`,
       `Content-Type: application/json`,
       ``,
@@ -674,6 +693,7 @@ export default function App() {
       ...notes.map((n) => `- ${n}`),
       ``,
       `CORS: your backend must allow the client's origin (already open in dev).`,
+      `If widget.js is opened from disk (file://) or a CDN on another host, add data-wl-api-origin="https://your-api-host" to the script tag (see backend integration notes).`,
       `Trial: if trialExpired is true on open, chat is blocked until the subscription is renewed.`,
     ].join('\n')
   }

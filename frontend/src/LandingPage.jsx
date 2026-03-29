@@ -1338,6 +1338,12 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
   const [masterColor, setMasterColor] = useState(() => readDockMasterColor())
   const [replyToneId, setReplyToneId] = useState('professional')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [visitorLeadOk, setVisitorLeadOk] = useState(false)
+  const [vLeadName, setVLeadName] = useState('')
+  const [vLeadEmail, setVLeadEmail] = useState('')
+  const [vLeadPhone, setVLeadPhone] = useState('')
+  const [leadGateErr, setLeadGateErr] = useState('')
+  const [leadGateSubmitting, setLeadGateSubmitting] = useState(false)
 
   const trialEnded = trialExpiredAtOpen || trialRanOut
 
@@ -1375,6 +1381,12 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
       setIqDone(false)
       setIqErr('')
       setReplyToneId('professional')
+      setVisitorLeadOk(false)
+      setVLeadName('')
+      setVLeadEmail('')
+      setVLeadPhone('')
+      setLeadGateErr('')
+      setLeadGateSubmitting(false)
       return
     }
     skewRef.current = session.serverTime ? Date.parse(session.serverTime) - Date.now() : 0
@@ -1392,6 +1404,12 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
     const stored = readDockToneForBot(cid)
     const picked = stored && DOCK_REPLY_TONE_IDS.has(stored) ? stored : serverDef
     setReplyToneId(picked)
+    setVisitorLeadOk(false)
+    setVLeadName('')
+    setVLeadEmail('')
+    setVLeadPhone('')
+    setLeadGateErr('')
+    setLeadGateSubmitting(false)
     setDraft('')
     setChatErr('')
     setIqDone(false)
@@ -1420,14 +1438,14 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
   useEffect(() => {
     if (!panelOpen) return
     const onKey = (e) => {
-      if (e.key === 'Escape' && !sending && !iqSubmitting) {
+      if (e.key === 'Escape' && !sending && !iqSubmitting && !leadGateSubmitting) {
         if (settingsOpen) setSettingsOpen(false)
         else onPanelOpenChange(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [panelOpen, onPanelOpenChange, sending, iqSubmitting, settingsOpen])
+  }, [panelOpen, onPanelOpenChange, sending, iqSubmitting, settingsOpen, leadGateSubmitting])
 
   useEffect(() => {
     if (!panelOpen) setSettingsOpen(false)
@@ -1445,10 +1463,51 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
     return () => document.removeEventListener('mousedown', close)
   }, [settingsOpen, panelOpen])
 
+  const handleLeadGateSubmit = async (ev) => {
+    ev.preventDefault()
+    setLeadGateErr('')
+    if (!sessionId || trialEnded) return
+    const nm = vLeadName.trim()
+    const em = vLeadEmail.trim()
+    const ph = vLeadPhone.trim()
+    if (!nm) {
+      setLeadGateErr('Please enter your name.')
+      return
+    }
+    if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+      setLeadGateErr('Please enter a valid email.')
+      return
+    }
+    if (!ph) {
+      setLeadGateErr('Please enter your phone number.')
+      return
+    }
+    setLeadGateSubmitting(true)
+    try {
+      const res = await fetch(`${CHAT_TEST_BASE}/session-lead`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, name: nm, email: em, phone: ph }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.ok) {
+        const apiErr = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : ''
+        throw new Error(apiErr || '__LEAD_GENERIC__')
+      }
+      setVisitorLeadOk(true)
+    } catch (err) {
+      const m = err instanceof Error ? err.message : ''
+      const fallback = 'Could not save your details. Try again.'
+      setLeadGateErr(m === '__LEAD_GENERIC__' ? fallback : publicErrorMessage(m, fallback))
+    } finally {
+      setLeadGateSubmitting(false)
+    }
+  }
+
   const handleSend = async (ev) => {
     ev.preventDefault()
     const text = draft.trim()
-    if (!text || sending || !sessionId || trialEnded) return
+    if (!text || sending || !sessionId || trialEnded || !visitorLeadOk) return
     setChatErr('')
     setDraft('')
     const optimisticThreadId = threadId || `session-${sessionId}`
@@ -1470,6 +1529,13 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
         setTrialRanOut(true)
         setAllHistory((prev) => prev.filter((m) => m.id !== tempId))
         setDraft(text)
+        return
+      }
+      if (res.status === 428 && data.needLead) {
+        setVisitorLeadOk(false)
+        setAllHistory((prev) => prev.filter((m) => m.id !== tempId))
+        setDraft(text)
+        setChatErr(typeof data.error === 'string' ? data.error : 'Please complete the form above to chat.')
         return
       }
       if (!res.ok || !data.ok) {
@@ -1896,6 +1962,61 @@ function TestChatFloatingDock({ session, panelOpen, onPanelOpenChange, onEndSess
                   </form>
                 )}
               </div>
+            </div>
+          ) : !visitorLeadOk ? (
+            <div className="chat-widget-dock__lead-wrap">
+              <form className="chat-widget-dock__lead" onSubmit={handleLeadGateSubmit}>
+                <p className="chat-widget-dock__lead-title">Start the conversation</p>
+                <p className="chat-widget-dock__lead-intro">
+                  Share how we can reach you—we’ll save this for the business as a lead.
+                </p>
+                <label className="chat-widget-dock__lead-label" htmlFor="vlead-name">
+                  Name <span className="chat-widget-dock__lead-req">*</span>
+                </label>
+                <input
+                  id="vlead-name"
+                  className="chat-widget-dock__lead-input"
+                  name="name"
+                  autoComplete="name"
+                  value={vLeadName}
+                  onChange={(e) => setVLeadName(e.target.value)}
+                  disabled={leadGateSubmitting}
+                />
+                <label className="chat-widget-dock__lead-label" htmlFor="vlead-email">
+                  Email <span className="chat-widget-dock__lead-req">*</span>
+                </label>
+                <input
+                  id="vlead-email"
+                  className="chat-widget-dock__lead-input"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  value={vLeadEmail}
+                  onChange={(e) => setVLeadEmail(e.target.value)}
+                  disabled={leadGateSubmitting}
+                />
+                <label className="chat-widget-dock__lead-label" htmlFor="vlead-phone">
+                  Phone <span className="chat-widget-dock__lead-req">*</span>
+                </label>
+                <input
+                  id="vlead-phone"
+                  className="chat-widget-dock__lead-input"
+                  name="phone"
+                  type="tel"
+                  autoComplete="tel"
+                  value={vLeadPhone}
+                  onChange={(e) => setVLeadPhone(e.target.value)}
+                  disabled={leadGateSubmitting}
+                />
+                {leadGateErr ? (
+                  <p className="chat-widget-dock__lead-err" role="alert">
+                    {leadGateErr}
+                  </p>
+                ) : null}
+                <button type="submit" className="chat-widget-dock__lead-submit" disabled={leadGateSubmitting}>
+                  {leadGateSubmitting ? 'Saving…' : 'Continue to chat'}
+                </button>
+              </form>
             </div>
           ) : (
             <>

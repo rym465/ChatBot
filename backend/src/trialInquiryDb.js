@@ -49,7 +49,8 @@ export async function saveTrialInquiryDb(payload) {
   const phone = typeof payload.phone === 'string' ? payload.phone : ''
   const websiteUrl = typeof payload.websiteUrl === 'string' ? payload.websiteUrl : ''
   const message = typeof payload.message === 'string' ? payload.message : ''
-  const chatbotId = typeof payload.chatbotId === 'string' ? payload.chatbotId : ''
+  const chatbotIdRaw = typeof payload.chatbotId === 'string' ? payload.chatbotId.trim() : ''
+  const chatbotId = /^\d{8}$/.test(chatbotIdRaw) ? chatbotIdRaw : null
 
   const r = await pool.query(
     `INSERT INTO public.trial_inquiries (source, business_name, name, email, phone, website_url, message, chatbot_id)

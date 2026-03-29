@@ -1,9 +1,10 @@
 import crypto from 'crypto'
 
 const SESSION_TTL_MS = 3* 60 * 60 * 1000
-const MAX_HISTORY_MESSAGES = 24
+/** Keep last 20 visitor prompts (20 user + 20 assistant messages = 40). */
+const MAX_HISTORY_MESSAGES = 40
 
-/** @type {Map<string, { inner: object, history: { role: string, content: string }[], expiresAt: number, trialEndsAt: string, chatbotId: string, threadId: string, trialBypass: boolean, noSessionExpiry: boolean, source: string, toneId: string }>} */
+/** @type {Map<string, { inner: object, history: { role: string, content: string }[], expiresAt: number, trialEndsAt: string, chatbotId: string, threadId: string, trialBypass: boolean, noSessionExpiry: boolean, source: string, toneId: string, visitorContact: { name: string, email: string, phone: string } | null, leadPersisted: boolean }>} */
 const sessions = new Map()
 
 function cleanup() {
@@ -40,6 +41,8 @@ export function createTestSession(inner, trialEndsAt, chatbotId, options = {}) {
     noSessionExpiry,
     source,
     toneId,
+    visitorContact: null,
+    leadPersisted: false,
   })
   return { sessionId, threadId }
 }
@@ -53,6 +56,8 @@ export function getTestSession(sessionId) {
   }
   if (!s.threadId) s.threadId = crypto.randomUUID()
   if (!s.noSessionExpiry) s.expiresAt = Date.now() + SESSION_TTL_MS
+  if (!('leadPersisted' in s)) s.leadPersisted = false
+  if (!('visitorContact' in s)) s.visitorContact = null
   return s
 }
 

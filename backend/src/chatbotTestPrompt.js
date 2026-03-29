@@ -119,7 +119,12 @@ const TONE_LABEL = {
   empathetic: 'Empathetic',
 }
 
-export function buildChatSystemPrompt(inner, toneId = 'professional') {
+/**
+ * @param {object} inner
+ * @param {string} [toneId]
+ * @param {{ name?: string, email?: string, phone?: string } | null} [visitorContact] Shown when the visitor shared contact to start chat.
+ */
+export function buildChatSystemPrompt(inner, toneId = 'professional', visitorContact = null) {
   const tone = normalizeChatToneId(toneId)
   const parts = []
   parts.push(
@@ -129,6 +134,20 @@ export function buildChatSystemPrompt(inner, toneId = 'professional') {
     `**CRITICAL — selected reply tone: "${TONE_LABEL[tone]}"** The visitor chose this tone in the chat UI. Every assistant message you write MUST clearly sound like this tone (word choice, rhythm, warmth, humor, or brevity as specified). Do not sound generic or neutral.`,
   )
   parts.push(`**How to apply "${TONE_LABEL[tone]}":** ${TONE_INSTRUCTIONS[tone]}`)
+  if (visitorContact && typeof visitorContact === 'object') {
+    const n = typeof visitorContact.name === 'string' ? visitorContact.name.trim() : ''
+    const e = typeof visitorContact.email === 'string' ? visitorContact.email.trim() : ''
+    const ph = typeof visitorContact.phone === 'string' ? visitorContact.phone.trim() : ''
+    if (n || e || ph) {
+      parts.push(
+        `\n--- Visitor contact (shared to start this chat) ---`,
+        `Address them by name when it fits naturally. Do **not** read back their full email or phone unless they ask. Never share these details with anyone else or expose them in generic replies.`,
+      )
+      if (n) parts.push(`Name: ${n}`)
+      if (e) parts.push(`Email: ${e}`)
+      if (ph) parts.push(`Phone: ${ph}`)
+    }
+  }
   parts.push(
     `If something is not covered, say you are not sure and suggest how the customer can reach the business (use contact details from the knowledge when present). Do not invent prices, guarantees, or service areas.`,
   )

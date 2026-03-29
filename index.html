@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AI Chatbot</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+    }
+
+    #chat-container {
+      width: 350px;
+      height: 500px;
+      margin: 50px auto;
+      border-radius: 12px;
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+      overflow: hidden;
+    }
+
+    #chat-header {
+      background: #007bff;
+      color: #fff;
+      padding: 12px;
+      text-align: center;
+      font-weight: bold;
+    }
+
+    #chat-box {
+      flex: 1;
+      padding: 10px;
+      overflow-y: auto;
+    }
+
+    .message {
+      margin: 8px 0;
+      padding: 8px 12px;
+      border-radius: 10px;
+      max-width: 80%;
+    }
+
+    .user {
+      background: #007bff;
+      color: #fff;
+      margin-left: auto;
+    }
+
+    .bot {
+      background: #eee;
+      color: #000;
+      margin-right: auto;
+    }
+
+    #input-area {
+      display: flex;
+      border-top: 1px solid #ddd;
+    }
+
+    #input {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      outline: none;
+    }
+
+    button {
+      padding: 10px 15px;
+      border: none;
+      background: #007bff;
+      color: white;
+      cursor: pointer;
+    }
+  </style>
+</head>
+
+<body>
+
+<div id="chat-container">
+  <div id="chat-header">AI Assistant</div>
+
+  <div id="chat-box"></div>
+
+  <div id="input-area">
+    <input id="input" type="text" placeholder="Type a message..." />
+    <button onclick="sendMessage()">Send</button>
+  </div>
+</div>
+
+<script>
+/** Full backend origin + /api — same as integration pack */
+const API_BASE = "https://white-label-ai-chatbot-generator-tyw4-h3t813bjf.vercel.app/api";
+const CHATBOT_ID = "54986926";
+const SECRET = "g8RWRsK-C93SlCSHJsoqA3aIvNa9bep8sstshXeR_J4";
+
+/** Shown to the server as the chat lead (required before any message). */
+const VISITOR_NAME = "Test Visitor";
+const VISITOR_EMAIL = "visitor@example.com";
+const VISITOR_PHONE = "555-0100";
+
+let sessionId = null;
+
+// Initialize session: open → session-lead → then chat works
+async function startSession() {
+  try {
+    const res = await fetch(`${API_BASE}/widget/open`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        chatbotId: CHATBOT_ID,
+        integrationSecret: SECRET
+      })
+    });
+
+    const data = await res.json();
+
+    if (!data.ok) {
+      alert(data.error || "Failed to start chatbot session");
+      return;
+    }
+
+    if (data.trialExpired) {
+      alert("Trial expired. Please renew subscription.");
+      return;
+    }
+
+    sessionId = data.sessionId;
+
+    const leadRes = await fetch(`${API_BASE}/chatbot-test/session-lead`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: sessionId,
+        name: VISITOR_NAME,
+        email: VISITOR_EMAIL,
+        phone: VISITOR_PHONE
+      })
+    });
+    const leadData = await leadRes.json().catch(() => ({}));
+    if (!leadRes.ok || !leadData.ok) {
+      alert(leadData.error || "Could not save visitor details (session-lead). Check API_BASE and network.");
+      sessionId = null;
+      return;
+    }
+
+    addMessage("bot", "Hi 👋 How can I help you today?");
+  } catch (err) {
+    console.error(err);
+    alert("Network error — open this page over https (not file://) if the browser blocks requests, or check CORS/backend.");
+  }
+}
+
+// Send message
+async function sendMessage() {
+  const input = document.getElementById("input");
+  const message = input.value.trim();
+
+  if (!message) return;
+
+  addMessage("user", message);
+  input.value = "";
+
+  try {
+    const res = await fetch(`${API_BASE}/chatbot-test/message`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        sessionId: sessionId,
+        message: message,
+        tone: "professional"
+      })
+    });
+
+    const data = await res.json();
+
+    if (data.ok) {
+      addMessage("bot", data.reply);
+    } else if (data.needLead) {
+      addMessage("bot", data.error || "Complete lead step first (session-lead).");
+    } else {
+      addMessage("bot", data.error || "Error getting response");
+    }
+
+  } catch (err) {
+    console.error(err);
+    addMessage("bot", "Server error");
+  }
+}
+
+// Add message to UI
+function addMessage(sender, text) {
+  const chatBox = document.getElementById("chat-box");
+
+  const msg = document.createElement("div");
+  msg.classList.add("message", sender);
+  msg.innerText = text;
+
+  chatBox.appendChild(msg);
+  chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+// Enter key support
+document.getElementById("input").addEventListener("keypress", function(e) {
+  if (e.key === "Enter") {
+    sendMessage();
+  }
+});
+
+// Start chatbot
+startSession();
+</script>
+
+</body>
+</html>

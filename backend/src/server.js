@@ -1057,6 +1057,62 @@ app.post('/api/trial-inquiry', async (req, res) => {
   }
 })
 
+app.post('/api/chatbot-test/session-lead', async (req, res) => {
+  try {
+    const { sessionId, name, email, phone } = req.body || {}
+    if (!sessionId || typeof sessionId !== 'string') {
+      return res.status(400).json({ ok: false, error: 'Missing session' })
+    }
+    const s = getTestSession(sessionId)
+    if (!s) {
+      return res.status(401).json({ ok: false, error: 'Session expired or invalid.' })
+    }
+
+    const em = typeof email === 'string' ? email.trim().slice(0, 320) : ''
+    if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+      return res.status(400).json({ ok: false, error: 'Valid email is required.' })
+    }
+    const nm = typeof name === 'string' ? name.trim().slice(0, 200) : ''
+    const ph = typeof phone === 'string' ? phone.trim().slice(0, 80) : ''
+    if (!nm) return res.status(400).json({ ok: false, error: 'Name is required.' })
+    if (!ph) return res.status(400).json({ ok: false, error: 'Phone is required.' })
+
+    if (s.leadPersisted) {
+      return res.json({ ok: true, duplicate: true })
+    }
+
+    const sc = s.inner?.structuredContext && typeof s.inner.structuredContext === 'object' ? s.inner.structuredContext : null
+    const businessName =
+      (typeof sc?.inferredBusinessName === 'string' && sc.inferredBusinessName.trim().slice(0, 200)) ||
+      (typeof s.inner?.pageTitle === 'string' && s.inner.pageTitle.trim().slice(0, 200)) ||
+      ''
+    const websiteUrl = typeof s.inner?.websiteUrl === 'string' ? s.inner.websiteUrl.trim().slice(0, 500) : ''
+
+    try {
+      await saveTrialInquiry({
+        source: 'chat-session',
+        businessName,
+        name: nm,
+        email: em,
+        phone: ph,
+        websiteUrl,
+        message: 'Captured when visitor started chat.',
+        chatbotId: s.chatbotId && /^\d{8}$/.test(String(s.chatbotId)) ? String(s.chatbotId) : '',
+      })
+    } catch (e) {
+      console.warn('[chatbot-test/session-lead] lead persist failed:', e)
+      return res.status(503).json({ ok: false, error: 'Could not save your details. Try again.' })
+    }
+
+    s.visitorContact = { name: nm, email: em, phone: ph }
+    s.leadPersisted = true
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('[chatbot-test/session-lead]', e)
+    res.status(500).json({ ok: false, error: 'Request failed' })
+  }
+})
+
 app.post('/api/chatbot-test/message', async (req, res) => {
   req.setTimeout(120000)
   res.setTimeout(120000)
@@ -1082,6 +1138,14 @@ app.post('/api/chatbot-test/message', async (req, res) => {
       })
     }
 
+    if (!s.leadPersisted) {
+      return res.status(428).json({
+        ok: false,
+        needLead: true,
+        error: 'Add your name, email, and phone to start the conversation.',
+      })
+    }
+
     const userMsg = typeof message === 'string' ? message.trim() : ''
     if (!userMsg) {
       return res.status(400).json({ ok: false, error: 'Message is required' })
@@ -1099,7 +1163,7 @@ app.post('/api/chatbot-test/message', async (req, res) => {
 
     const reqTone = typeof tone === 'string' ? tone.trim() : ''
     const toneId = normalizeChatToneId(reqTone || s.toneId)
-    const systemPrompt = buildChatSystemPrompt(s.inner, toneId)
+    const systemPrompt = buildChatSystemPrompt(s.inner, toneId, s.visitorContact || null)
     const history = s.history.map((m) => ({ role: m.role, content: m.content }))
 
     const { content: reply, model } = await runChatCompletion({
@@ -1795,6 +1859,12 @@ app.get('/api/admin/chatbot/:chatbotId/integration', async (req, res) => {
       message: 'What services do you offer?',
       tone: 'professional',
     }
+    const sessionLeadExample = {
+      sessionId: '<paste sessionId from open response>',
+      name: 'Jane Smith',
+      email: 'jane@example.com',
+      phone: '+1 555 123 4567',
+    }
     const historyExample = { sessionId: '<paste sessionId from open response>' }
     const clearExample = { sessionId: '<paste sessionId from open response>' }
 
@@ -1807,12 +1877,14 @@ app.get('/api/admin/chatbot/:chatbotId/integration', async (req, res) => {
       embedCode,
       endpoints: {
         widgetOpen: `${apiBase}/widget/open`,
+        sessionLead: `${apiBase}/chatbot-test/session-lead`,
         chatMessage: `${apiBase}/chatbot-test/message`,
         chatHistory: `${apiBase}/chatbot-test/history`,
         chatClear: `${apiBase}/chatbot-test/clear`,
       },
       payload: {
         open: openBody,
+        sessionLead: sessionLeadExample,
         message: messageExample,
         history: historyExample,
         clear: clearExample,
@@ -1820,7 +1892,8 @@ app.get('/api/admin/chatbot/:chatbotId/integration', async (req, res) => {
       responseShape: {
         open:
           '{ ok, sessionId, threadId, chatHistory?, theme?, chatbotId, trialEndsAt, serverTime, trialExpired, supportContact? }',
-        message: '{ ok, reply, model?, threadId, saved? }',
+        sessionLead: '{ ok, duplicate? }',
+        message: '{ ok, reply, model?, threadId, saved? } | 428 { ok:false, needLead:true }',
         history: '{ ok, messages, threadId }',
         clear: '{ ok, threadId }',
       },
@@ -1830,8 +1903,9 @@ app.get('/api/admin/chatbot/:chatbotId/integration', async (req, res) => {
         'Give your client chatbotId + integrationSecret only (SDK). They do not use the end-user “Test chatbot” password on their site.',
         'integrationSecret is like an API key: anyone with it can chat as this bot. Use admin Copy again to rotate.',
         'First Copy on an old row may re-crawl the stored website URL server-side (can take 1–2 minutes); keep the tab open.',
-        'Flow: POST widget/open → use sessionId from JSON → POST chatbot-test/message for each user message.',
+        'Flow: POST widget/open → POST chatbot-test/session-lead (name, email, phone) once → POST chatbot-test/message for each user message.',
         'Sessions are server memory (~2h idle). Call widget/open again if you get session expired.',
+        'If widget.js is loaded from file:// or another domain than your API, add data-wl-api-origin="https://your-api-host" (no trailing slash) on the same <script> tag.',
         'Production: backend should set PUBLIC_API_ORIGIN=https://your-deployment.vercel.app (Vercel also sets VERCEL_URL) so this pack never lists 127.0.0.1 when you run admin locally.',
      ],
     })
@@ -1930,7 +2004,7 @@ app.listen(PORT, async () => {
   console.log('GET /api/chatbot-context/new-id — allocate 8-digit context ID')
   console.log('POST /api/chatbot-context/save — secure store + issue auto widget integration')
   console.log(
-    'POST /api/chatbot-test/open | /message | /history | /clear — personal chat (3-day trial, persistent history)',
+    'POST /api/chatbot-test/open | /session-lead | /message | /history | /clear — personal chat (3-day trial, persistent history)',
   )
   console.log('POST /api/trial-inquiry — contact form after trial')
   console.log('POST /api/contact-demo — Request a demo (Nodemailer → owner + submitter)')
